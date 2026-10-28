@@ -1417,7 +1417,7 @@ function App() {
     }
   };
 
-  const monthDate = `${monthKey(selectedDate)}-01`;
+
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-minimized' : ''}`}>
