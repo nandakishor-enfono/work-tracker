@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from 'react';
 import {
   CalendarDays, ChevronLeft, ChevronRight, Clock3, Download, FileUp,
   LayoutDashboard, Plus, Search, Settings2, Pencil, Trash2,
@@ -6,7 +6,8 @@ import {
   FileSpreadsheet, CalendarRange, ClipboardCopy, Sparkles, RefreshCw,
   StickyNote, PanelLeftClose, PanelLeftOpen, Sun, Moon,
   ArrowUp, ArrowDown, GripVertical, ArrowRightCircle, ListPlus, List,
-  Cloud, CloudUpload, Lock, Unlock, CheckSquare, Square
+  Cloud, CloudUpload, Lock, Unlock, CheckSquare, Square,
+  MoreHorizontal, ChevronDown, Columns, Layers, RotateCcw
 } from 'lucide-react';
 
 export type WorkOutcome =
@@ -60,6 +61,45 @@ const LEGACY_STORAGE_V2 = 'my-work-log.entries.v2';
 const LEGACY_STORAGE_V1 = 'my-work-log.entries.v1';
 const LEGACY_MODULES_V2 = 'my-work-log.modules.v2';
 const LEGACY_MODULES_V1 = 'my-work-log.modules.v1';
+const DENSITY_KEY = 'my-work-log.table-density.v1';
+const GROUP_BY_CATEGORY_KEY = 'my-work-log.group-by-category.v1';
+const VISIBLE_COLUMNS_KEY = 'my-work-log.visible-columns.v1';
+
+export type TableDensity = 'compact' | 'normal' | 'relaxed';
+
+export type VisibleColumns = {
+  order: boolean;
+  rowNo: boolean;
+  task: boolean;
+  module: boolean;
+  outcome: boolean;
+  hours: boolean;
+  type: boolean;
+  reference: boolean;
+  remarks: boolean;
+};
+
+export const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
+  order: true,
+  rowNo: true,
+  task: true,
+  module: true,
+  outcome: true,
+  hours: true,
+  type: true,
+  reference: true,
+  remarks: true,
+};
+
+export const outcomeMeta: Record<WorkOutcome, { label: string; shortLabel: string; dotClass: string; icon: string }> = {
+  'A Completed': { label: 'A Completed', shortLabel: 'Completed', dotClass: 'dot-a', icon: '●' },
+  'B In Progress': { label: 'B In Progress', shortLabel: 'In Progress', dotClass: 'dot-b', icon: '◐' },
+  'C Pending, awaiting action': { label: 'C Pending, awaiting action', shortLabel: 'Pending', dotClass: 'dot-c', icon: '◌' },
+  'D Issues reported, I will fix': { label: 'D Issues reported, I will fix', shortLabel: 'Issues reported', dotClass: 'dot-d', icon: '▲' },
+  'E On Hold- intentionally paused.': { label: 'E On Hold- intentionally paused.', shortLabel: 'On Hold', dotClass: 'dot-e', icon: '⏸' },
+  'F Blocked, cannot proceed': { label: 'F Blocked, cannot proceed', shortLabel: 'Blocked', dotClass: 'dot-f', icon: '⛔' },
+  '': { label: '(Blank / None)', shortLabel: 'Set Outcome', dotClass: 'dot-empty', icon: '○' },
+};
 
 export const companyModules: string[] = [
   'Administration',
@@ -494,7 +534,51 @@ function App() {
   };
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
-  const [inlineEditingCell, setInlineEditingCell] = useState<{ id: string; field: 'hours' | 'reference'; value: string } | null>(null);
+  const [inlineEditingCell, setInlineEditingCell] = useState<{ id: string; field: 'hours' | 'reference' | 'activity'; value: string } | null>(null);
+
+  const [tableDensity, setTableDensity] = useState<TableDensity>(() => {
+    try {
+      const saved = localStorage.getItem(DENSITY_KEY) as TableDensity;
+      if (saved === 'compact' || saved === 'normal' || saved === 'relaxed') return saved;
+      return 'normal';
+    } catch {
+      return 'normal';
+    }
+  });
+
+  const [groupByCategory, setGroupByCategory] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(GROUP_BY_CATEGORY_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
+    try {
+      const saved = localStorage.getItem(VISIBLE_COLUMNS_KEY);
+      if (saved) return { ...DEFAULT_VISIBLE_COLUMNS, ...JSON.parse(saved) };
+      return DEFAULT_VISIBLE_COLUMNS;
+    } catch {
+      return DEFAULT_VISIBLE_COLUMNS;
+    }
+  });
+
+  const [recentlyCopiedRowId, setRecentlyCopiedRowId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: 'above' | 'below' } | null>(null);
+  const [activeOutcomeMenuId, setActiveOutcomeMenuId] = useState<string | null>(null);
+  const [activeMoreMenuId, setActiveMoreMenuId] = useState<string | null>(null);
+  const [showColumnsMenu, setShowColumnsMenu] = useState<boolean>(false);
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+
+  const toggleCategoryCollapse = (cat: string) => {
+    setCollapsedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
 
   const toggleSelectRow = (id: string) => {
     setSelectedRowIds(prev => {
@@ -529,7 +613,18 @@ function App() {
     setNotice(nextLocked ? `Locked row against edits & deletes.` : `Unlocked row.`);
   };
 
-  const saveInlineEdit = (id: string, field: 'hours' | 'reference', value: string) => {
+  const isCancellingInlineRef = useRef(false);
+
+  const cancelInlineEdit = () => {
+    isCancellingInlineRef.current = true;
+    setInlineEditingCell(null);
+  };
+
+  const saveInlineEdit = (id: string, field: 'hours' | 'reference' | 'activity', value: string) => {
+    if (isCancellingInlineRef.current) {
+      isCancellingInlineRef.current = false;
+      return;
+    }
     const target = entries.find(e => e.id === id);
     if (target?.isLocked) {
       setNotice('Cannot edit a locked row.');
@@ -541,11 +636,15 @@ function App() {
         if (e.id !== id) return e;
         if (field === 'hours') {
           const num = value === '' ? 0 : Number(value);
-          const safeNum = Number.isFinite(num) && num >= 0 ? Math.min(24, num) : e.hours;
+          const safeNum = Number.isFinite(num) && num >= 0 ? Math.round(Math.min(24, num) * 100) / 100 : e.hours;
           return { ...e, hours: safeNum, updatedAt: new Date().toISOString() };
         }
         if (field === 'reference') {
           return { ...e, reference: value.trim(), updatedAt: new Date().toISOString() };
+        }
+        if (field === 'activity') {
+          const trimmed = value.trim();
+          return { ...e, activity: trimmed || e.activity, updatedAt: new Date().toISOString() };
         }
         return e;
       })
@@ -617,7 +716,15 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (showForm) {
+        if (inlineEditingCell) {
+          cancelInlineEdit();
+        } else if (activeOutcomeMenuId) {
+          setActiveOutcomeMenuId(null);
+        } else if (activeMoreMenuId) {
+          setActiveMoreMenuId(null);
+        } else if (showColumnsMenu) {
+          setShowColumnsMenu(false);
+        } else if (showForm) {
           setShowForm(false);
           setEditing(null);
         } else if (showSettings) {
@@ -627,7 +734,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showForm, showSettings]);
+  }, [showForm, showSettings, inlineEditingCell, activeOutcomeMenuId, activeMoreMenuId, showColumnsMenu]);
 
   useEffect(() => {
     try {
@@ -674,6 +781,47 @@ function App() {
   }, [cloudSyncUrl]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(DENSITY_KEY, tableDensity);
+    } catch {
+      // Storage exception handler
+    }
+  }, [tableDensity]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(GROUP_BY_CATEGORY_KEY, String(groupByCategory));
+    } catch {
+      // Storage exception handler
+    }
+  }, [groupByCategory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify(visibleColumns));
+    } catch {
+      // Storage exception handler
+    }
+  }, [visibleColumns]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.outcome-popover-container')) {
+        setActiveOutcomeMenuId(null);
+      }
+      if (!target.closest('.more-menu-container')) {
+        setActiveMoreMenuId(null);
+      }
+      if (!target.closest('.columns-menu-container')) {
+        setShowColumnsMenu(false);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(''), 3800);
     return () => window.clearTimeout(timer);
@@ -716,6 +864,63 @@ function App() {
   const inProgressCount = dayEntries.filter(e => e.workDone === 'B In Progress').length;
   const monthHours = monthEntries.reduce((sum, e) => sum + Number(e.hours || 0), 0);
   const monthDays = new Set(monthEntries.map(e => e.date)).size;
+
+  const visibleTotalHours = visibleEntries.reduce((sum, e) => sum + Number(e.hours || 0), 0);
+  const visibleCompletedCount = visibleEntries.filter(e => e.workDone === 'A Completed').length;
+  const visibleInProgressCount = visibleEntries.filter(e => e.workDone === 'B In Progress').length;
+  const entryIndexMap = useMemo(() => new Map(visibleEntries.map((e, idx) => [e.id, idx])), [visibleEntries]);
+
+  const activeColumnCount =
+    1 // select-col
+    + (visibleColumns.order ? 1 : 0)
+    + (visibleColumns.rowNo ? 1 : 0)
+    + (visibleColumns.task ? 1 : 0)
+    + (visibleColumns.module ? 1 : 0)
+    + 1 // activity (always visible)
+    + (visibleColumns.outcome ? 1 : 0)
+    + (visibleColumns.hours ? 1 : 0)
+    + (visibleColumns.type ? 1 : 0)
+    + (visibleColumns.reference ? 1 : 0)
+    + (visibleColumns.remarks ? 1 : 0)
+    + 1; // actions (always visible)
+
+  const groupedEntries = useMemo(() => {
+    if (!groupByCategory) {
+      return [{ category: 'all', title: 'All Entries', entries: visibleEntries }];
+    }
+    const groups: { category: TaskCategory | string; title: string; entries: WorkEntry[] }[] = [];
+    const standardCategories: TaskCategory[] = ["A Today's Work", "B Tomorrow's Plan", "C Leave"];
+
+    standardCategories.forEach(cat => {
+      const items = visibleEntries.filter(e => e.taskCategory === cat);
+      if (items.length > 0) {
+        groups.push({ category: cat, title: cat, entries: items });
+      }
+    });
+
+    const otherItems = visibleEntries.filter(e => !standardCategories.includes(e.taskCategory));
+    if (otherItems.length > 0) {
+      groups.push({ category: 'Other', title: 'Other Categories', entries: otherItems });
+    }
+
+    return groups;
+  }, [visibleEntries, groupByCategory]);
+
+  const resetAllFilters = () => {
+    setQuery('');
+    setTaskFilter('All tasks');
+    setModuleFilter('All modules');
+    setOutcomeFilter('All outcomes');
+    setTypeFilter('All types');
+  };
+
+  const hasActiveFilters = Boolean(
+    query ||
+    taskFilter !== 'All tasks' ||
+    moduleFilter !== 'All modules' ||
+    outcomeFilter !== 'All outcomes' ||
+    typeFilter !== 'All types'
+  );
 
   const changeDate = useCallback((amount: number) => {
     if (view === 'month') {
@@ -1103,7 +1308,10 @@ function App() {
       if (currentGlobalIdx === -1 || targetGlobalIdx === -1) return old;
 
       const updated = [...old];
-      const [removed] = updated.splice(currentGlobalIdx, 1);
+      let [removed] = updated.splice(currentGlobalIdx, 1);
+      if (groupByCategory && currentEntry.taskCategory !== targetEntry.taskCategory) {
+        removed = { ...removed, taskCategory: targetEntry.taskCategory, updatedAt: new Date().toISOString() };
+      }
       updated.splice(targetGlobalIdx, 0, removed);
       return updated;
     });
@@ -1122,15 +1330,24 @@ function App() {
     e.dataTransfer.setData('text/plain', id);
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent, targetId?: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    if (!targetId || !draggedId || draggedId === targetId) {
+      setDropTarget(null);
+      return;
+    }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const position = relY < rect.height / 2 ? 'above' : 'below';
+    setDropTarget({ id: targetId, position });
   };
 
   const handleDrop = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
     if (!draggedId || draggedId === targetId) {
       setDraggedId(null);
+      setDropTarget(null);
       return;
     }
 
@@ -1139,21 +1356,31 @@ function App() {
     if (sourceItem?.isLocked || targetItem?.isLocked) {
       setNotice('Cannot reorder locked rows.');
       setDraggedId(null);
+      setDropTarget(null);
       return;
     }
 
     setEntries(old => {
       const sourceIdx = old.findIndex(item => item.id === draggedId);
-      const targetIdx = old.findIndex(item => item.id === targetId);
-      if (sourceIdx === -1 || targetIdx === -1) return old;
+      if (sourceIdx === -1) return old;
 
       const updated = [...old];
-      const [movedItem] = updated.splice(sourceIdx, 1);
+      let [movedItem] = updated.splice(sourceIdx, 1);
+      let targetIdx = updated.findIndex(item => item.id === targetId);
+      if (targetIdx === -1) return old;
+
+      if (dropTarget?.position === 'below') {
+        targetIdx += 1;
+      }
+      if (groupByCategory && targetItem && movedItem.taskCategory !== targetItem.taskCategory) {
+        movedItem = { ...movedItem, taskCategory: targetItem.taskCategory, updatedAt: new Date().toISOString() };
+      }
       updated.splice(targetIdx, 0, movedItem);
       return updated;
     });
 
     setDraggedId(null);
+    setDropTarget(null);
     setNotice('Row reordered.');
   };
 
@@ -1182,6 +1409,13 @@ function App() {
     );
     const success = await copyToClipboard(tsvText, htmlTable);
     if (success) {
+      if (targets.length === 1) {
+        setRecentlyCopiedRowId(targets[0].id);
+        window.setTimeout(() => {
+          setRecentlyCopiedRowId(prev => (prev === targets[0].id ? null : prev));
+        }, 1500);
+      }
+
       if (singleRowNumber !== undefined) {
         setNotice(customMessage || `Copied 1 row (#${singleRowNumber}) for Google Sheet!`);
       } else {
@@ -1653,12 +1887,118 @@ function App() {
           <section className="entries-panel">
             <div className="panel-heading">
               <div>
-                <h2>{view === 'day' ? 'Work entries' : 'All monthly entries'}</h2>
+                <div className="panel-title-with-date">
+                  <h2>{view === 'day' ? 'Work entries' : 'All monthly entries'}</h2>
+                  <span className="panel-work-date-badge" title="Active date for these work entries">
+                    <CalendarDays size={13} />
+                    <strong>{formatSheetDate(selectedDate)}</strong>
+                    <span className="date-badge-sep">·</span>
+                    <span className="date-badge-full">
+                      {view === 'day'
+                        ? prettyDate(selectedDate, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+                        : monthLabel(selectedDate)}
+                    </span>
+                  </span>
+                </div>
                 <p>
                   {visibleEntries.length} {visibleEntries.length === 1 ? 'entry' : 'entries'} shown
+                  {selectedRowIds.size > 0 && ` · ${selectedRowIds.size} selected`}
                 </p>
               </div>
               <div className="panel-action-buttons">
+                {/* Table Density Switcher */}
+                <div className="table-density-switch" title="Row density">
+                  <button
+                    type="button"
+                    className={`density-btn ${tableDensity === 'compact' ? 'active' : ''}`}
+                    onClick={() => setTableDensity('compact')}
+                    title="Compact view (fits more rows)"
+                  >
+                    Compact
+                  </button>
+                  <button
+                    type="button"
+                    className={`density-btn ${tableDensity === 'normal' ? 'active' : ''}`}
+                    onClick={() => setTableDensity('normal')}
+                    title="Normal view"
+                  >
+                    Normal
+                  </button>
+                  <button
+                    type="button"
+                    className={`density-btn ${tableDensity === 'relaxed' ? 'active' : ''}`}
+                    onClick={() => setTableDensity('relaxed')}
+                    title="Comfortable view (relaxed padding)"
+                  >
+                    Relaxed
+                  </button>
+                </div>
+
+                {/* Group by Category Toggle */}
+                <button
+                  type="button"
+                  className={`secondary-button group-toggle-btn ${groupByCategory ? 'is-grouped' : ''}`}
+                  onClick={() => setGroupByCategory(prev => !prev)}
+                  title={groupByCategory ? "Switch to flat list view" : "Group tasks by category"}
+                >
+                  <Layers size={14} />
+                  <span>{groupByCategory ? 'Grouped' : 'Flat'}</span>
+                </button>
+
+                {/* Columns Visibility Dropdown */}
+                <div className="columns-menu-container">
+                  <button
+                    type="button"
+                    className={`secondary-button columns-toggle-btn ${showColumnsMenu ? 'active' : ''}`}
+                    onClick={() => setShowColumnsMenu(prev => !prev)}
+                    title="Customize visible columns"
+                  >
+                    <Columns size={14} />
+                    <span>Columns</span>
+                  </button>
+                  {showColumnsMenu && (
+                    <div className="columns-dropdown-menu">
+                      <div className="columns-menu-header">Customize Columns</div>
+                      <div className="columns-menu-list">
+                        {[
+                          { key: 'order', label: 'Order / Drag Handles' },
+                          { key: 'rowNo', label: 'Google Sheet Row #' },
+                          { key: 'task', label: 'Task Category & Date' },
+                          { key: 'module', label: 'Module / Area' },
+                          { key: 'outcome', label: 'Work Done / Outcome' },
+                          { key: 'hours', label: 'Time (Hours)' },
+                          { key: 'type', label: 'Work Type' },
+                          { key: 'reference', label: 'Ticket / Reference' },
+                          { key: 'remarks', label: 'App Remarks' },
+                        ].map(col => (
+                          <label key={col.key} className="columns-checkbox-item">
+                            <input
+                              type="checkbox"
+                              checked={visibleColumns[col.key as keyof VisibleColumns]}
+                              onChange={e =>
+                                setVisibleColumns(prev => ({
+                                  ...prev,
+                                  [col.key]: e.target.checked,
+                                }))
+                              }
+                            />
+                            <span>{col.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="columns-menu-footer">
+                        <button
+                          type="button"
+                          className="text-link-btn"
+                          onClick={() => setVisibleColumns(DEFAULT_VISIBLE_COLUMNS)}
+                        >
+                          Reset all columns
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <label className="header-toggle" title="Include the column names row when copying to clipboard">
                   <input
                     type="checkbox"
@@ -1667,15 +2007,17 @@ function App() {
                   />
                   <span>Include header row</span>
                 </label>
+
                 {visibleEntries.some(e => e.taskCategory === "B Tomorrow's Plan") && (
                   <button
                     className="secondary-button promote-plans-btn"
                     title="Promote all Tomorrow's Plans from this view to Today's Work"
                     onClick={promoteAllPlansToToday}
                   >
-                    <ListPlus size={16} /> Carry Forward Plans to Today
+                    <ListPlus size={15} /> Carry Forward Plans
                   </button>
                 )}
+
                 <div className="sheet-row-tracker" title="Starting row number for Google Sheet Column 1 (No.). Auto-advances after copying!">
                   <span className="sheet-row-label">Start No.#</span>
                   <input
@@ -1696,6 +2038,7 @@ function App() {
                     }}
                   />
                 </div>
+
                 {(() => {
                   const visibleSelectedList = visibleEntries.filter(e => selectedRowIds.has(e.id));
                   if (!visibleSelectedList.length) return null;
@@ -1728,6 +2071,7 @@ function App() {
                     </div>
                   );
                 })()}
+
                 <button
                   className="primary-button sheet-btn small-sheet-btn"
                   onClick={() => handleCopyForSheet(visibleEntries)}
@@ -1793,12 +2137,62 @@ function App() {
               </select>
             </div>
 
+            {/* Active Filter Chips */}
+            {hasActiveFilters && (
+              <div className="active-filter-chips">
+                <span className="active-filters-label">Active filters:</span>
+                {query && (
+                  <span className="filter-chip">
+                    Search: "{query}"
+                    <button type="button" onClick={() => setQuery('')} aria-label="Clear search">
+                      <X size={12} />
+                    </button>
+                  </span>
+                )}
+                {taskFilter !== 'All tasks' && (
+                  <span className="filter-chip">
+                    Task: {taskFilter}
+                    <button type="button" onClick={() => setTaskFilter('All tasks')} aria-label="Clear task filter">
+                      <X size={12} />
+                    </button>
+                  </span>
+                )}
+                {moduleFilter !== 'All modules' && (
+                  <span className="filter-chip">
+                    Module: {moduleFilter}
+                    <button type="button" onClick={() => setModuleFilter('All modules')} aria-label="Clear module filter">
+                      <X size={12} />
+                    </button>
+                  </span>
+                )}
+                {outcomeFilter !== 'All outcomes' && (
+                  <span className="filter-chip">
+                    Outcome: {outcomeFilter}
+                    <button type="button" onClick={() => setOutcomeFilter('All outcomes')} aria-label="Clear outcome filter">
+                      <X size={12} />
+                    </button>
+                  </span>
+                )}
+                {typeFilter !== 'All types' && (
+                  <span className="filter-chip">
+                    Type: {typeFilter}
+                    <button type="button" onClick={() => setTypeFilter('All types')} aria-label="Clear type filter">
+                      <X size={12} />
+                    </button>
+                  </span>
+                )}
+                <button type="button" className="clear-all-filters-btn" onClick={resetAllFilters}>
+                  <RotateCcw size={12} /> Clear all
+                </button>
+              </div>
+            )}
+
             {visibleEntries.length ? (
-              <div className="table-wrap">
+              <div className="table-wrap" data-density={tableDensity}>
                 <table>
                   <thead>
                     <tr>
-                      <th style={{ width: '32px', textAlign: 'center' }} className="select-col">
+                      <th style={{ width: '32px', textAlign: 'center' }} className="select-col sticky-left">
                         <button
                           type="button"
                           className="row-select-btn"
@@ -1812,292 +2206,622 @@ function App() {
                           )}
                         </button>
                       </th>
-                      <th style={{ width: '42px', textAlign: 'center' }}>ORDER</th>
-                      <th style={{ width: '38px' }}>NO.</th>
-                      <th>TASK</th>
-                      <th>MODULE / AREA</th>
+                      {visibleColumns.order && (
+                        <th style={{ width: '42px', textAlign: 'center' }}>ORDER</th>
+                      )}
+                      {visibleColumns.rowNo && (
+                        <th style={{ width: '38px' }} className="row-num-col">NO.</th>
+                      )}
+                      {visibleColumns.task && <th>TASK</th>}
+                      {visibleColumns.module && <th>MODULE / AREA</th>}
                       <th>ACTIVITY (TASK DESCRIPTION)</th>
-                      <th>WORK DONE / OUTCOME (DDL)</th>
-                      <th>TIME</th>
-                      <th>TYPE</th>
-                      <th>TICKET / REFERENCE</th>
-                      <th>APP REMARKS (INTERNAL)</th>
-                      <th>
+                      {visibleColumns.outcome && <th>WORK DONE / OUTCOME (DDL)</th>}
+                      {visibleColumns.hours && <th>TIME</th>}
+                      {visibleColumns.type && <th>TYPE</th>}
+                      {visibleColumns.reference && <th>TICKET / REFERENCE</th>}
+                      {visibleColumns.remarks && <th>APP REMARKS (INTERNAL)</th>}
+                      <th className="actions-header-col">
                         <span className="sr-only">Actions</span>
                       </th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {visibleEntries.map((entry, index) => {
-                      const isSelected = selectedRowIds.has(entry.id);
-                      const isLocked = Boolean(entry.isLocked);
-                      const isEditingHours = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'hours';
-                      const isEditingRef = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'reference';
+                  <tbody
+                    onDragLeave={e => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setDropTarget(null);
+                      }
+                    }}
+                  >
+                    {groupedEntries.map(group => {
+                      const isGroupedMode = groupByCategory && group.category !== 'all';
+                      const isCollapsed = collapsedCategories.has(group.category);
+                      const groupTotalHours = group.entries.reduce((sum, e) => sum + Number(e.hours || 0), 0);
 
                       return (
-                        <tr
-                          key={entry.id}
-                          draggable={!isLocked}
-                          onDragStart={e => !isLocked && handleDragStart(e, entry.id)}
-                          onDragOver={handleDragOver}
-                          onDrop={e => !isLocked && handleDrop(e, entry.id)}
-                          className={`table-row-item ${draggedId === entry.id ? 'is-dragging' : ''} ${isSelected ? 'row-selected' : ''} ${isLocked ? 'row-locked' : ''}`}
-                        >
-                          <td className="select-cell" style={{ textAlign: 'center' }}>
-                            <button
-                              type="button"
-                              className="row-select-btn"
-                              title={isSelected ? "Deselect row" : "Select row"}
-                              onClick={() => toggleSelectRow(entry.id)}
-                            >
-                              {isSelected ? (
-                                <CheckSquare size={16} className="checked-icon" />
-                              ) : (
-                                <Square size={16} />
-                              )}
-                            </button>
-                          </td>
-                          <td className="reorder-cell">
-                            <div className="reorder-controls">
-                              <span
-                                className={`drag-handle ${isLocked ? 'disabled-handle' : ''}`}
-                                title={isLocked ? "Row is locked" : "Drag to reorder"}
-                                aria-label="Drag to reorder row"
-                              >
-                                <GripVertical size={14} />
-                              </span>
-                              <div className="arrow-reorder-btns">
-                                <button
-                                  type="button"
-                                  className="arrow-btn"
-                                  disabled={index === 0 || isLocked}
-                                  title={isLocked ? "Row locked" : "Move row up"}
-                                  aria-label="Move row up"
-                                  onClick={() => moveRow(index, 'up')}
-                                >
-                                  <ArrowUp size={11} />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="arrow-btn"
-                                  disabled={index === visibleEntries.length - 1 || isLocked}
-                                  title={isLocked ? "Row locked" : "Move row down"}
-                                  aria-label="Move row down"
-                                  onClick={() => moveRow(index, 'down')}
-                                >
-                                  <ArrowDown size={11} />
-                                </button>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="row-num" title={`Google Sheet Row #${startRowNo + index}`}>
-                            {startRowNo + index}
-                          </td>
-                          <td>
-                            <span className={`task-badge ${getTaskCategoryClass(entry.taskCategory)}`}>
-                              {entry.taskCategory}
-                            </span>
-                            <span className="entry-date">
-                              {formatSheetDate(entry.date)}
-                            </span>
-                          </td>
-                          <td>
-                            <span className={`module-pill ${getModuleClass(entry.module)}`}>
-                              {entry.module || '—'}
-                            </span>
-                          </td>
-                          <td className="activity-cell">
-                            {(() => {
-                              const isExpanded = expandedActivityIds.has(entry.id);
-                              const isLong = (entry.activity.match(/\n/g) || []).length >= 3 || entry.activity.length > 140;
-                              return (
-                                <div
-                                  className={`activity-wrap ${isExpanded ? 'is-expanded' : ''} ${isLong ? 'can-expand' : ''}`}
-                                  onClick={() => isLong && toggleActivityExpand(entry.id)}
-                                  title={isLong ? (isExpanded ? 'Click to collapse' : 'Click to expand') : undefined}
-                                >
-                                  <div className="activity-text">{entry.activity}</div>
-                                  {isLong && (
-                                    <span className="activity-expand-hint">
-                                      {isExpanded ? 'Show less' : '...more'}
+                        <Fragment key={`group-wrapper-${group.category}`}>
+                          {isGroupedMode && (
+                            <tr className="table-group-header-row" key={`group-hdr-${group.category}`}>
+                              <td colSpan={activeColumnCount} className="table-group-header-cell">
+                                <div className="table-group-header-content">
+                                  <button
+                                    type="button"
+                                    className="group-collapse-btn"
+                                    onClick={() => toggleCategoryCollapse(group.category)}
+                                    title={isCollapsed ? "Expand section" : "Collapse section"}
+                                  >
+                                    {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                                    <span className={`task-badge ${getTaskCategoryClass(group.category as TaskCategory)}`}>
+                                      {group.title}
                                     </span>
+                                    <span className="group-count-pill">{group.entries.length} {group.entries.length === 1 ? 'task' : 'tasks'}</span>
+                                    <span className="group-hours-pill">{fmtHours(groupTotalHours)} hrs</span>
+                                  </button>
+                                  {group.category === "B Tomorrow's Plan" && (
+                                    <button
+                                      type="button"
+                                      className="group-quick-action-btn"
+                                      title="Carry forward all plans from this section to Today's Work"
+                                      onClick={promoteAllPlansToToday}
+                                    >
+                                      <ListPlus size={13} />
+                                      <span>Promote to Today</span>
+                                    </button>
                                   )}
                                 </div>
-                              );
-                            })()}
-                          </td>
-                          <td>
-                            <select
-                              disabled={isLocked}
-                              className={`status-select ${getOutcomeClass(entry.workDone)}`}
-                              aria-label={`Outcome for ${entry.activity}`}
-                              value={entry.workDone}
-                              onChange={e => updateOutcome(entry, e.target.value as WorkOutcome)}
-                            >
-                              <option value="">(None / Blank)</option>
-                              {outcomeOptions.map(s => (
-                                <option key={s} value={s}>
-                                  {s}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td
-                            className={`editable-cell ${isLocked ? 'locked-cell' : ''}`}
-                            title={isLocked ? "Row is locked" : "Click to fast-edit hours"}
-                            onClick={() => {
-                              if (!isLocked && !isEditingHours) {
-                                setInlineEditingCell({
-                                  id: entry.id,
-                                  field: 'hours',
-                                  value: entry.hours ? String(entry.hours) : '',
-                                });
-                              }
-                            }}
-                          >
-                            {isEditingHours ? (
-                              <input
-                                autoFocus
-                                type="number"
-                                min="0"
-                                max="24"
-                                step="0.01"
-                                className="inline-cell-input hours-inline-input"
-                                value={inlineEditingCell.value}
-                                onClick={e => e.stopPropagation()}
-                                onChange={e =>
-                                  setInlineEditingCell({ ...inlineEditingCell, value: e.target.value })
-                                }
-                                onKeyDown={e => {
-                                  if (e.key === 'Enter') {
-                                    saveInlineEdit(entry.id, 'hours', inlineEditingCell.value);
-                                  } else if (e.key === 'Escape') {
-                                    setInlineEditingCell(null);
-                                  }
-                                }}
-                                onBlur={() => saveInlineEdit(entry.id, 'hours', inlineEditingCell.value)}
-                              />
-                            ) : entry.hours && Number(entry.hours) > 0 ? (
-                              <>
-                                <strong className="hours-value">{fmtHours(entry.hours)}</strong>
-                                <span className="duration-sub">{durationLabel(entry.hours)}</span>
-                              </>
-                            ) : (
-                              <span className="muted quick-edit-placeholder">+ hrs</span>
-                            )}
-                          </td>
-                          <td>
-                            {entry.type ? (
-                              <span className={`type-tag ${getTypeClass(entry.type)}`}>{entry.type}</span>
-                            ) : (
-                              <span className="muted">—</span>
-                            )}
-                          </td>
-                          <td
-                            className={`editable-cell ${isLocked ? 'locked-cell' : ''}`}
-                            title={isLocked ? "Row is locked" : "Click to fast-edit ticket reference"}
-                            onClick={() => {
-                              if (!isLocked && !isEditingRef) {
-                                setInlineEditingCell({
-                                  id: entry.id,
-                                  field: 'reference',
-                                  value: entry.reference || '',
-                                });
-                              }
-                            }}
-                          >
-                            {isEditingRef ? (
-                              <input
-                                autoFocus
-                                type="text"
-                                className="inline-cell-input ref-inline-input"
-                                value={inlineEditingCell.value}
-                                onClick={e => e.stopPropagation()}
-                                onChange={e =>
-                                  setInlineEditingCell({ ...inlineEditingCell, value: e.target.value })
-                                }
-                                onKeyDown={e => {
-                                  if (e.key === 'Enter') {
-                                    saveInlineEdit(entry.id, 'reference', inlineEditingCell.value);
-                                  } else if (e.key === 'Escape') {
-                                    setInlineEditingCell(null);
-                                  }
-                                }}
-                                onBlur={() => saveInlineEdit(entry.id, 'reference', inlineEditingCell.value)}
-                              />
-                            ) : entry.reference ? (
-                              <div className="reference-tag">{entry.reference}</div>
-                            ) : (
-                              <span className="muted quick-edit-placeholder">+ ticket</span>
-                            )}
-                          </td>
-                          <td className="remarks-cell">
-                            {entry.appRemarks ? (
-                              <span className="app-remarks-pill" title={entry.appRemarks}>
-                                <StickyNote size={12} />
-                                <span>{entry.appRemarks}</span>
-                              </span>
-                            ) : (
-                              <span className="muted">—</span>
-                            )}
-                          </td>
-                          <td>
-                            <div className="row-actions">
-                              <button
-                                className={`tiny-action lock-action-btn ${isLocked ? 'is-locked-btn' : ''}`}
-                                title={isLocked ? "Row is LOCKED. Click to unlock" : "Row is unlocked. Click to LOCK against edit/delete"}
-                                onClick={() => toggleLockRow(entry)}
-                              >
-                                {isLocked ? <Lock size={15} /> : <Unlock size={15} />}
-                              </button>
-                              {entry.taskCategory === "B Tomorrow's Plan" && (
-                                <button
-                                  className="tiny-action promote-row-action"
-                                  title="Promote this plan to Today's Work"
-                                  disabled={isLocked}
-                                  onClick={() => promotePlanToToday(entry)}
+                              </td>
+                            </tr>
+                          )}
+
+                          {!isCollapsed &&
+                            group.entries.map(entry => {
+                              const index = entryIndexMap.get(entry.id) ?? 0;
+                              const isSelected = selectedRowIds.has(entry.id);
+                              const isLocked = Boolean(entry.isLocked);
+                              const isEditingHours = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'hours';
+                              const isEditingRef = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'reference';
+                              const isEditingActivity = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'activity';
+                              const isDragging = draggedId === entry.id;
+                              const isDropAbove = dropTarget?.id === entry.id && dropTarget.position === 'above';
+                              const isDropBelow = dropTarget?.id === entry.id && dropTarget.position === 'below';
+                              const isCopiedPulse = recentlyCopiedRowId === entry.id;
+                              const isMenuOpen = activeMoreMenuId === entry.id || activeOutcomeMenuId === entry.id;
+                              const isNearBottom = visibleEntries.length > 2 && index >= visibleEntries.length - 2;
+
+                              return (
+                                <tr
+                                  key={entry.id}
+                                  draggable={!isLocked}
+                                  onDragStart={e => !isLocked && handleDragStart(e, entry.id)}
+                                  onDragOver={e => !isLocked && handleDragOver(e, entry.id)}
+                                  onDrop={e => !isLocked && handleDrop(e, entry.id)}
+                                  onDragEnd={() => {
+                                    setDraggedId(null);
+                                    setDropTarget(null);
+                                  }}
+                                  className={`table-row-item ${isMenuOpen ? 'has-active-menu' : ''} ${isDragging ? 'is-dragging' : ''} ${isSelected ? 'row-selected' : ''} ${isLocked ? 'row-locked' : ''} ${isDropAbove ? 'drop-target-above' : ''} ${isDropBelow ? 'drop-target-below' : ''} ${isCopiedPulse ? 'row-copied-flash' : ''}`}
                                 >
-                                  <ArrowRightCircle size={15} />
-                                </button>
-                              )}
-                              <button
-                                className="tiny-action copy-sheet-action"
-                                title={`Copy this row for Google Sheet (Row #${startRowNo + index})`}
-                                onClick={() =>
-                                  handleCopyForSheet([entry], undefined, startRowNo + index)
-                                }
-                              >
-                                <ClipboardCopy size={15} />
-                              </button>
-                              <button
-                                className="tiny-action"
-                                title="Duplicate to selected date"
-                                onClick={() => copyEntryToDate(entry)}
-                              >
-                                <Copy size={15} />
-                              </button>
-                              <button
-                                className="tiny-action"
-                                title={isLocked ? "Row locked" : "Edit entry"}
-                                disabled={isLocked}
-                                onClick={() => openEdit(entry)}
-                              >
-                                <Pencil size={15} />
-                              </button>
-                              <button
-                                className="tiny-action danger-hover"
-                                title={isLocked ? "Row locked" : "Delete entry"}
-                                disabled={isLocked}
-                                onClick={() => deleteEntry(entry)}
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                                  <td className="select-cell sticky-left" style={{ textAlign: 'center' }}>
+                                    <button
+                                      type="button"
+                                      className="row-select-btn"
+                                      title={isSelected ? "Deselect row" : "Select row"}
+                                      onClick={() => toggleSelectRow(entry.id)}
+                                    >
+                                      {isSelected ? (
+                                        <CheckSquare size={16} className="checked-icon" />
+                                      ) : (
+                                        <Square size={16} />
+                                      )}
+                                    </button>
+                                  </td>
+
+                                  {visibleColumns.order && (
+                                    <td className="reorder-cell">
+                                      <div className="reorder-controls">
+                                        <span
+                                          className={`drag-handle ${isLocked ? 'disabled-handle' : ''}`}
+                                          title={isLocked ? "Row is locked" : "Drag to reorder"}
+                                          aria-label="Drag to reorder row"
+                                        >
+                                          <GripVertical size={14} />
+                                        </span>
+                                        <div className="arrow-reorder-btns">
+                                          <button
+                                            type="button"
+                                            className="arrow-btn"
+                                            disabled={index === 0 || isLocked}
+                                            title={isLocked ? "Row locked" : "Move row up"}
+                                            aria-label="Move row up"
+                                            onClick={() => moveRow(index, 'up')}
+                                          >
+                                            <ArrowUp size={11} />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="arrow-btn"
+                                            disabled={index === visibleEntries.length - 1 || isLocked}
+                                            title={isLocked ? "Row locked" : "Move row down"}
+                                            aria-label="Move row down"
+                                            onClick={() => moveRow(index, 'down')}
+                                          >
+                                            <ArrowDown size={11} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.rowNo && (
+                                    <td className="row-num row-num-col" title={`Google Sheet Row #${startRowNo + index}`}>
+                                      {startRowNo + index}
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.task && (
+                                    <td>
+                                      <span className={`task-badge ${getTaskCategoryClass(entry.taskCategory)}`}>
+                                        {entry.taskCategory}
+                                      </span>
+                                      {isLocked && (
+                                        <span className="row-locked-badge" title="Row locked against edits and reordering">
+                                          <Lock size={10} />
+                                          <span>Locked</span>
+                                        </span>
+                                      )}
+                                      {view === 'month' && (
+                                        <span className="entry-date">
+                                          {formatSheetDate(entry.date)}
+                                        </span>
+                                      )}
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.module && (
+                                    <td>
+                                      <span className={`module-pill ${getModuleClass(entry.module)}`}>
+                                        {entry.module || '—'}
+                                      </span>
+                                    </td>
+                                  )}
+
+                                  <td className="activity-cell">
+                                    {isEditingActivity ? (
+                                      <div className="inline-activity-editor" onClick={e => e.stopPropagation()}>
+                                        <textarea
+                                          autoFocus
+                                          rows={3}
+                                          className="inline-cell-input inline-activity-input"
+                                          value={inlineEditingCell.value}
+                                          onChange={e =>
+                                            setInlineEditingCell({ ...inlineEditingCell, value: e.target.value })
+                                          }
+                                          onKeyDown={e => {
+                                            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                              saveInlineEdit(entry.id, 'activity', inlineEditingCell.value);
+                                            } else if (e.key === 'Escape') {
+                                              e.stopPropagation();
+                                              cancelInlineEdit();
+                                            }
+                                          }}
+                                          onBlur={() => saveInlineEdit(entry.id, 'activity', inlineEditingCell.value)}
+                                        />
+                                        <div className="inline-activity-hints">
+                                          <span>Ctrl+Enter or click outside to save · Esc to cancel</span>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      (() => {
+                                        const isExpanded = expandedActivityIds.has(entry.id);
+                                        const isLong = (entry.activity.match(/\n/g) || []).length >= 3 || entry.activity.length > 140;
+                                        return (
+                                          <div
+                                            className={`activity-wrap ${isExpanded ? 'is-expanded' : ''} ${isLong ? 'can-expand' : ''}`}
+                                            onClick={() => isLong && toggleActivityExpand(entry.id)}
+                                            onDoubleClick={() => {
+                                              if (!isLocked) {
+                                                setInlineEditingCell({
+                                                  id: entry.id,
+                                                  field: 'activity',
+                                                  value: entry.activity,
+                                                });
+                                              }
+                                            }}
+                                            title={
+                                              isLong
+                                                ? isExpanded
+                                                  ? 'Click to collapse (Double-click to fast edit)'
+                                                  : 'Click to expand (Double-click to fast edit)'
+                                                : isLocked
+                                                ? undefined
+                                                : 'Double-click to fast edit activity'
+                                            }
+                                          >
+                                            <div className="activity-text">{entry.activity}</div>
+                                            <div className="activity-footer-line">
+                                              {isLong && (
+                                                <span className="activity-expand-hint">
+                                                  {isExpanded ? 'Show less' : '...more'}
+                                                </span>
+                                              )}
+                                              {!isLocked && (
+                                                <span
+                                                  className="activity-edit-affordance"
+                                                  onClick={e => {
+                                                    e.stopPropagation();
+                                                    setInlineEditingCell({
+                                                      id: entry.id,
+                                                      field: 'activity',
+                                                      value: entry.activity,
+                                                    });
+                                                  }}
+                                                  title="Fast edit description inline"
+                                                >
+                                                  <Pencil size={11} />
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        );
+                                      })()
+                                    )}
+                                  </td>
+
+                                  {/* Custom Interactive Outcome Popover */}
+                                  {visibleColumns.outcome && (
+                                    <td className={`outcome-cell ${activeOutcomeMenuId === entry.id ? 'has-active-menu' : ''}`}>
+                                      <div className="outcome-popover-container">
+                                        <button
+                                          type="button"
+                                          disabled={isLocked}
+                                          className={`outcome-pill-btn ${getOutcomeClass(entry.workDone)} ${isLocked ? 'locked' : ''}`}
+                                          title={isLocked ? "Row is locked" : "Click to change outcome"}
+                                          onClick={() => {
+                                            if (!isLocked) {
+                                              setActiveOutcomeMenuId(prev => (prev === entry.id ? null : entry.id));
+                                            }
+                                          }}
+                                        >
+                                          <span className={`outcome-dot ${outcomeMeta[entry.workDone]?.dotClass || 'dot-empty'}`}>
+                                            {outcomeMeta[entry.workDone]?.icon || '○'}
+                                          </span>
+                                          <span className="outcome-text">
+                                            {outcomeMeta[entry.workDone]?.shortLabel || entry.workDone || 'Set Outcome'}
+                                          </span>
+                                          {!isLocked && <ChevronDown size={11} className="outcome-chevron" />}
+                                        </button>
+
+                                        {activeOutcomeMenuId === entry.id && !isLocked && (
+                                          <div className={`outcome-menu-dropdown ${isNearBottom ? 'open-upwards' : ''}`}>
+                                            <div className="outcome-menu-title">Select Work Outcome</div>
+                                            <button
+                                              type="button"
+                                              className={`outcome-menu-item ${!entry.workDone ? 'selected' : ''}`}
+                                              onClick={() => {
+                                                updateOutcome(entry, '');
+                                                setActiveOutcomeMenuId(null);
+                                              }}
+                                            >
+                                              <span className="outcome-dot dot-empty">○</span>
+                                              <span>(None / Blank)</span>
+                                              {!entry.workDone && <Check size={14} className="outcome-check-icon" />}
+                                            </button>
+                                            {outcomeOptions.map(outcome => {
+                                              const meta = outcomeMeta[outcome];
+                                              return (
+                                                <button
+                                                  key={outcome}
+                                                  type="button"
+                                                  className={`outcome-menu-item ${entry.workDone === outcome ? 'selected' : ''}`}
+                                                  onClick={() => {
+                                                    updateOutcome(entry, outcome);
+                                                    setActiveOutcomeMenuId(null);
+                                                  }}
+                                                >
+                                                  <span className={`outcome-dot ${meta.dotClass}`}>{meta.icon}</span>
+                                                  <span className="outcome-menu-label">{meta.label}</span>
+                                                  {entry.workDone === outcome && <Check size={14} className="outcome-check-icon" />}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.hours && (
+                                    <td
+                                      className={`editable-cell ${isLocked ? 'locked-cell' : ''}`}
+                                      title={isLocked ? "Row is locked" : "Click to fast-edit hours"}
+                                      onClick={() => {
+                                        if (!isLocked && !isEditingHours) {
+                                          setInlineEditingCell({
+                                            id: entry.id,
+                                            field: 'hours',
+                                            value: entry.hours ? String(entry.hours) : '',
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      {isEditingHours ? (
+                                        <input
+                                          autoFocus
+                                          type="number"
+                                          min="0"
+                                          max="24"
+                                          step="0.01"
+                                          className="inline-cell-input hours-inline-input"
+                                          value={inlineEditingCell.value}
+                                          onClick={e => e.stopPropagation()}
+                                          onChange={e =>
+                                            setInlineEditingCell({ ...inlineEditingCell, value: e.target.value })
+                                          }
+                                          onKeyDown={e => {
+                                            if (e.key === 'Enter') {
+                                              saveInlineEdit(entry.id, 'hours', inlineEditingCell.value);
+                                            } else if (e.key === 'Escape') {
+                                              e.stopPropagation();
+                                              cancelInlineEdit();
+                                            }
+                                          }}
+                                          onBlur={() => saveInlineEdit(entry.id, 'hours', inlineEditingCell.value)}
+                                        />
+                                      ) : entry.hours && Number(entry.hours) > 0 ? (
+                                        <>
+                                          <strong className="hours-value">{fmtHours(entry.hours)}</strong>
+                                          <span className="duration-sub">{durationLabel(entry.hours)}</span>
+                                        </>
+                                      ) : (
+                                        <span className="muted quick-edit-placeholder">+ hrs</span>
+                                      )}
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.type && (
+                                    <td>
+                                      {entry.type ? (
+                                        <span className={`type-tag ${getTypeClass(entry.type)}`}>{entry.type}</span>
+                                      ) : (
+                                        <span className="muted">—</span>
+                                      )}
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.reference && (
+                                    <td
+                                      className={`editable-cell ${isLocked ? 'locked-cell' : ''}`}
+                                      title={isLocked ? "Row is locked" : "Click to fast-edit ticket reference"}
+                                      onClick={() => {
+                                        if (!isLocked && !isEditingRef) {
+                                          setInlineEditingCell({
+                                            id: entry.id,
+                                            field: 'reference',
+                                            value: entry.reference || '',
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      {isEditingRef ? (
+                                        <input
+                                          autoFocus
+                                          type="text"
+                                          className="inline-cell-input ref-inline-input"
+                                          value={inlineEditingCell.value}
+                                          onClick={e => e.stopPropagation()}
+                                          onChange={e =>
+                                            setInlineEditingCell({ ...inlineEditingCell, value: e.target.value })
+                                          }
+                                          onKeyDown={e => {
+                                            if (e.key === 'Enter') {
+                                              saveInlineEdit(entry.id, 'reference', inlineEditingCell.value);
+                                            } else if (e.key === 'Escape') {
+                                              e.stopPropagation();
+                                              cancelInlineEdit();
+                                            }
+                                          }}
+                                          onBlur={() => saveInlineEdit(entry.id, 'reference', inlineEditingCell.value)}
+                                        />
+                                      ) : entry.reference ? (
+                                        <div className="reference-tag">{entry.reference}</div>
+                                      ) : (
+                                        <span className="muted quick-edit-placeholder">+ ticket</span>
+                                      )}
+                                    </td>
+                                  )}
+
+                                  {visibleColumns.remarks && (
+                                    <td className="remarks-cell">
+                                      {entry.appRemarks ? (
+                                        <span className="app-remarks-pill" title={entry.appRemarks}>
+                                          <StickyNote size={12} />
+                                          <span>{entry.appRemarks}</span>
+                                        </span>
+                                      ) : (
+                                        <span className="muted">—</span>
+                                      )}
+                                    </td>
+                                  )}
+
+                                  {/* Streamlined Row Actions with Hover Reveal & 3-Dot Overflow */}
+                                  <td className={`actions-col ${activeMoreMenuId === entry.id ? 'has-active-menu' : ''}`}>
+                                    <div className="row-actions">
+                                      {entry.taskCategory === "B Tomorrow's Plan" && (
+                                        <button
+                                          className="tiny-action promote-row-action"
+                                          title="Promote this plan to Today's Work"
+                                          disabled={isLocked}
+                                          onClick={() => promotePlanToToday(entry)}
+                                        >
+                                          <ArrowRightCircle size={15} />
+                                        </button>
+                                      )}
+
+                                      <button
+                                        className="tiny-action copy-sheet-action"
+                                        title={`Copy this row for Google Sheet (Row #${startRowNo + index})`}
+                                        onClick={() =>
+                                          handleCopyForSheet([entry], undefined, startRowNo + index)
+                                        }
+                                      >
+                                        <ClipboardCopy size={15} />
+                                      </button>
+
+                                      {isLocked ? (
+                                        <button
+                                          type="button"
+                                          className="tiny-action lock-action-btn is-locked-btn"
+                                          title="Row is locked. Click to unlock"
+                                          onClick={() => toggleLockRow(entry)}
+                                        >
+                                          <Lock size={15} />
+                                        </button>
+                                      ) : (
+                                        <button
+                                          className="tiny-action"
+                                          title="Edit entry"
+                                          onClick={() => openEdit(entry)}
+                                        >
+                                          <Pencil size={15} />
+                                        </button>
+                                      )}
+
+                                      {/* 3-Dot Overflow Menu */}
+                                      <div className="more-menu-container">
+                                        <button
+                                          type="button"
+                                          className={`tiny-action more-action-btn ${activeMoreMenuId === entry.id ? 'is-active' : ''}`}
+                                          title="More row actions"
+                                          onClick={() =>
+                                            setActiveMoreMenuId(prev => (prev === entry.id ? null : entry.id))
+                                          }
+                                        >
+                                          <MoreHorizontal size={15} />
+                                        </button>
+
+                                        {activeMoreMenuId === entry.id && (
+                                          <div className={`row-more-dropdown ${isNearBottom ? 'open-upwards' : ''}`}>
+                                            <button
+                                              type="button"
+                                              className="dropdown-menu-item"
+                                              onClick={() => {
+                                                toggleLockRow(entry);
+                                                setActiveMoreMenuId(null);
+                                              }}
+                                            >
+                                              {isLocked ? <Unlock size={14} /> : <Lock size={14} />}
+                                              <span>{isLocked ? 'Unlock Row' : 'Lock Row'}</span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="dropdown-menu-item"
+                                              onClick={() => {
+                                                copyEntryToDate(entry);
+                                                setActiveMoreMenuId(null);
+                                              }}
+                                            >
+                                              <Copy size={14} />
+                                              <span>Duplicate to Date</span>
+                                            </button>
+                                            {!isLocked && (
+                                              <button
+                                                type="button"
+                                                className="dropdown-menu-item danger-item"
+                                                onClick={() => {
+                                                  deleteEntry(entry);
+                                                  setActiveMoreMenuId(null);
+                                                }}
+                                              >
+                                                <Trash2 size={14} />
+                                                <span>Delete Entry</span>
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </Fragment>
                       );
                     })}
                   </tbody>
+
+                  {/* Summary Footer Row */}
+                  <tfoot>
+                    <tr className="table-summary-row">
+                      <td className="summary-cell sticky-left" style={{ textAlign: 'center' }}>
+                        <span className="summary-count-badge" title="Total visible tasks">
+                          {visibleEntries.length}
+                        </span>
+                      </td>
+                      {visibleColumns.order && <td className="summary-empty-cell" />}
+                      {visibleColumns.rowNo && (
+                        <td className="summary-cell summary-text-muted" title="Sheet row range">
+                          {visibleEntries.length === 1
+                            ? `#${startRowNo}`
+                            : `#${startRowNo}–#${startRowNo + visibleEntries.length - 1}`}
+                        </td>
+                      )}
+                      {visibleColumns.task && (
+                        <td className="summary-cell summary-text-muted">
+                          {selectedRowIds.size > 0 ? `${selectedRowIds.size} selected` : 'Summary'}
+                        </td>
+                      )}
+                      {visibleColumns.module && <td className="summary-empty-cell" />}
+                      <td className="summary-cell summary-activity-progress">
+                        <div className="summary-progress-wrap">
+                          <div className="summary-progress-text">
+                            <span>
+                              <strong>{visibleCompletedCount}</strong> of {visibleEntries.length} completed
+                            </span>
+                            <span className="summary-pct">
+                              {Math.round((visibleCompletedCount / (visibleEntries.length || 1)) * 100)}%
+                            </span>
+                          </div>
+                          <div className="summary-progress-bar">
+                            <div
+                              className="summary-progress-fill"
+                              style={{
+                                width: `${Math.min(
+                                  100,
+                                  Math.round((visibleCompletedCount / (visibleEntries.length || 1)) * 100)
+                                )}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                      {visibleColumns.outcome && (
+                        <td className="summary-cell summary-outcome-stat">
+                          <span className="summary-stat-pill">
+                            {visibleInProgressCount} in progress
+                          </span>
+                        </td>
+                      )}
+                      {visibleColumns.hours && (
+                        <td className="summary-cell summary-hours-cell">
+                          <strong className="summary-hours-val">{fmtHours(visibleTotalHours)} hrs</strong>
+                          <span className="summary-duration-sub">{durationLabel(visibleTotalHours)}</span>
+                        </td>
+                      )}
+                      {visibleColumns.type && <td className="summary-empty-cell" />}
+                      {visibleColumns.reference && <td className="summary-empty-cell" />}
+                      {visibleColumns.remarks && <td className="summary-empty-cell" />}
+                      <td className="summary-cell summary-actions-cell actions-col">
+                        <button
+                          type="button"
+                          className="table-footer-copy-btn"
+                          title="Copy all visible rows for Google Sheet"
+                          onClick={() => handleCopyForSheet(visibleEntries)}
+                        >
+                          <ClipboardCopy size={13} />
+                          <span>Copy for Sheet</span>
+                        </button>
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             ) : (
@@ -2106,32 +2830,22 @@ function App() {
                   <CalendarDays size={25} />
                 </div>
                 <h3>
-                  {query ||
-                  taskFilter !== 'All tasks' ||
-                  outcomeFilter !== 'All outcomes' ||
-                  moduleFilter !== 'All modules' ||
-                  typeFilter !== 'All types'
-                    ? 'No matching entries'
-                    : 'Nothing logged here yet'}
+                  {hasActiveFilters ? 'No matching entries' : 'Nothing logged here yet'}
                 </h3>
                 <p>
-                  {query ||
-                  taskFilter !== 'All tasks' ||
-                  outcomeFilter !== 'All outcomes' ||
-                  moduleFilter !== 'All modules' ||
-                  typeFilter !== 'All types'
-                    ? 'Try changing your search or filters.'
+                  {hasActiveFilters
+                    ? 'Try changing or clearing your search and filters.'
                     : 'Add your first task to start building your work log.'}
                 </p>
-                {!query &&
-                  taskFilter === 'All tasks' &&
-                  outcomeFilter === 'All outcomes' &&
-                  moduleFilter === 'All modules' &&
-                  typeFilter === 'All types' && (
-                    <button className="primary-button" onClick={openNew}>
-                      <Plus size={17} /> Add your first entry
-                    </button>
-                  )}
+                {hasActiveFilters ? (
+                  <button type="button" className="secondary-button reset-filters-btn" onClick={resetAllFilters}>
+                    <RotateCcw size={15} /> Reset all filters
+                  </button>
+                ) : (
+                  <button className="primary-button" onClick={openNew}>
+                    <Plus size={17} /> Add your first entry
+                  </button>
+                )}
               </div>
             )}
 
