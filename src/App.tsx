@@ -551,6 +551,30 @@ function App() {
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [inlineEditingCell, setInlineEditingCell] = useState<{ id: string; field: 'hours' | 'reference' | 'activity'; value: string } | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!installPrompt) return;
+    try {
+      installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice && choice.outcome === 'accepted') {
+        setInstallPrompt(null);
+        setNotice('Work Tracker installed successfully to your desktop!');
+      }
+    } catch {
+      // User dismissed prompt
+    }
+  };
 
   const [tableDensity, setTableDensity] = useState<TableDensity>(() => {
     try {
@@ -1740,6 +1764,18 @@ function App() {
                 </div>
               </div>
             </>
+          )}
+
+          {installPrompt && (
+            <button
+              className="nav-item"
+              onClick={handleInstallApp}
+              title="Install as Desktop App"
+              style={{ color: '#0d9488', fontWeight: 600 }}
+            >
+              <Download size={18} />
+              {!sidebarCollapsed && <span>Install App</span>}
+            </button>
           )}
 
           <button
@@ -3339,8 +3375,18 @@ function App() {
             <div className="backup-callout">
               <Database size={20} />
               <div>
-                <strong>Local Storage Status</strong>
-                <p>Data is also saved offline in this browser. Cloud backup updates your personal Google Sheet on demand.</p>
+                <strong>Local Storage &amp; Offline PWA</strong>
+                <p>This app is Progressive Web App (PWA) enabled. All tasks are cached locally and work 100% offline without internet.</p>
+                {installPrompt && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={handleInstallApp}
+                    style={{ marginTop: '8px', padding: '5px 12px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <Download size={13} /> Install as Desktop App
+                  </button>
+                )}
               </div>
             </div>
 
