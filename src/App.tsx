@@ -64,6 +64,7 @@ const LEGACY_MODULES_V1 = 'my-work-log.modules.v1';
 const DENSITY_KEY = 'my-work-log.table-density.v1';
 const GROUP_BY_CATEGORY_KEY = 'my-work-log.group-by-category.v1';
 const VISIBLE_COLUMNS_KEY = 'my-work-log.visible-columns.v1';
+const LEFT_ALIGN_NO_DATE_KEY = 'my-work-log.left-align-no-date.v1';
 
 export type TableDensity = 'compact' | 'normal' | 'relaxed';
 
@@ -322,7 +323,8 @@ const formatEntriesForSheet = (
   entriesList: WorkEntry[],
   includeHeaders = false,
   dateFormat: 'DD-MMM-YY' | 'YYYY-MM-DD' = 'DD-MMM-YY',
-  startRowNo = 1
+  startRowNo = 1,
+  leftAlignNoAndDate = true
 ) => {
   const headerLabels = [
     'No.',
@@ -344,9 +346,12 @@ const formatEntriesForSheet = (
     const typeFormatted = entry.type || '';
     const workDoneFormatted = entry.workDone || '';
 
+    const noValue = leftAlignNoAndDate ? `'${baseNo + index}` : baseNo + index;
+    const dateValue = leftAlignNoAndDate ? `'${formattedDate}` : formattedDate;
+
     return [
-      baseNo + index,
-      formattedDate,
+      noValue,
+      dateValue,
       entry.taskCategory || "A Today's Work",
       entry.module || '',
       entry.activity || '',
@@ -364,7 +369,7 @@ const formatEntriesForSheet = (
     .join('\r\n');
 
   const htmlRows = allRows
-    .map(row => `<tr>${row.map(cell => `<td>${escapeHTML(String(cell))}</td>`).join('')}</tr>`)
+    .map(row => `<tr>${row.map(cell => `<td style="text-align: left;" align="left">${escapeHTML(String(cell))}</td>`).join('')}</tr>`)
     .join('');
   const htmlTable = `<table><tbody>${htmlRows}</tbody></table>`;
 
@@ -488,6 +493,17 @@ function App() {
   const [notice, setNotice] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [includeHeadersInCopy, setIncludeHeadersInCopy] = useState(false);
+  const [leftAlignNoAndDate, setLeftAlignNoAndDate] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(LEFT_ALIGN_NO_DATE_KEY);
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    } catch {
+      // storage handled
+    }
+    return true;
+  });
   const [sheetDateFormat, setSheetDateFormat] = useState<'DD-MMM-YY' | 'YYYY-MM-DD'>(() => {
     return (localStorage.getItem(DATE_FORMAT_KEY) as any) || 'DD-MMM-YY';
   });
@@ -767,6 +783,14 @@ function App() {
       // Storage exception handler
     }
   }, [startRowNo]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LEFT_ALIGN_NO_DATE_KEY, String(leftAlignNoAndDate));
+    } catch {
+      // Storage exception handler
+    }
+  }, [leftAlignNoAndDate]);
 
   useEffect(() => {
     try {
@@ -1405,7 +1429,8 @@ function App() {
       targets,
       includeHeadersInCopy,
       sheetDateFormat,
-      currentBase
+      currentBase,
+      leftAlignNoAndDate
     );
     const success = await copyToClipboard(tsvText, htmlTable);
     if (success) {
@@ -2006,6 +2031,15 @@ function App() {
                     onChange={e => setIncludeHeadersInCopy(e.target.checked)}
                   />
                   <span>Include header row</span>
+                </label>
+
+                <label className="header-toggle" title="Automatically left-align Sl No. and Date when pasting to Google Sheet">
+                  <input
+                    type="checkbox"
+                    checked={leftAlignNoAndDate}
+                    onChange={e => setLeftAlignNoAndDate(e.target.checked)}
+                  />
+                  <span>Left-align No &amp; Date</span>
                 </label>
 
                 {visibleEntries.some(e => e.taskCategory === "B Tomorrow's Plan") && (
@@ -3180,6 +3214,23 @@ function App() {
                   <option value="DD-MMM-YY">DD-MMM-YY (e.g. 24-Oct-26) - Recommended</option>
                   <option value="YYYY-MM-DD">YYYY-MM-DD (e.g. 2026-10-24)</option>
                 </select>
+              </label>
+            </div>
+
+            <div className="date-format-setting">
+              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={leftAlignNoAndDate}
+                  onChange={e => setLeftAlignNoAndDate(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: '#2563eb', cursor: 'pointer' }}
+                />
+                <div>
+                  <strong>Left-align Sl No. &amp; Date in Google Sheet</strong>
+                  <span style={{ display: 'block', fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                    Formats Sl No. and Date as left-aligned text so Google Sheet doesn&apos;t right-align them.
+                  </span>
+                </div>
               </label>
             </div>
 
