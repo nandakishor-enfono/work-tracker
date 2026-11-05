@@ -4208,5 +4208,309 @@ tfoot {
   animation: copySuccessPulseDark 1.4s ease-out;
 }
 
+/* ==========================================================================
+   REAL FLOATING STICKY NOTES (DRAGGABLE, COLORFUL & RESIZABLE)
+   ========================================================================== */
+.floating-sticky-note {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999;
+  width: 320px;
+  height: 350px;
+  min-width: 260px;
+  min-height: 220px;
+  max-width: 90vw;
+  max-height: 85vh;
+  resize: both;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24), 0 3px 10px rgba(0, 0, 0, 0.12);
+  transition: box-shadow 0.2s ease;
+  user-select: text;
+  font-family: inherit;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.floating-sticky-note:focus-within {
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.3), 0 5px 14px rgba(0, 0, 0, 0.16);
+}
+
+/* Post-it Themes */
+.sticky-theme-yellow {
+  background: #fef9c3;
+  color: #451a03;
+}
+.sticky-theme-yellow .sticky-header {
+  background: #fde047;
+  border-bottom: 1px solid rgba(161, 98, 7, 0.2);
+}
+
+.sticky-theme-green {
+  background: #dcfce7;
+  color: #052e16;
+}
+.sticky-theme-green .sticky-header {
+  background: #86efac;
+  border-bottom: 1px solid rgba(22, 101, 52, 0.2);
+}
+
+.sticky-theme-blue {
+  background: #e0f2fe;
+  color: #082f49;
+}
+.sticky-theme-blue .sticky-header {
+  background: #7dd3fc;
+  border-bottom: 1px solid rgba(3, 105, 161, 0.2);
+}
+
+.sticky-theme-pink {
+  background: #fce7f3;
+  color: #500724;
+}
+.sticky-theme-pink .sticky-header {
+  background: #f9a8d4;
+  border-bottom: 1px solid rgba(157, 23, 77, 0.2);
+}
+
+.sticky-theme-purple {
+  background: #f3e8ff;
+  color: #3b0764;
+}
+.sticky-theme-purple .sticky-header {
+  background: #d8b4fe;
+  border-bottom: 1px solid rgba(107, 33, 168, 0.2);
+}
+
+.sticky-theme-dark {
+  background: #1e293b;
+  color: #f8fafc;
+  border-color: #334155;
+}
+.sticky-theme-dark .sticky-header {
+  background: #0f172a;
+  border-bottom: 1px solid #334155;
+}
+
+/* Sticky Header (Drag handle) */
+.sticky-header {
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: grab;
+  user-select: none;
+}
+.sticky-header:active {
+  cursor: grabbing;
+}
+
+.sticky-header-left, .sticky-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sticky-icon-btn {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+.sticky-icon-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+}
+.sticky-theme-dark .sticky-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.sticky-page-indicator {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 4px;
+  opacity: 0.85;
+}
+
+/* Color Dots */
+.sticky-color-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 4px;
+}
+
+.sticky-color-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease, border-color 0.15s;
+}
+.sticky-color-dot:hover {
+  transform: scale(1.25);
+}
+.sticky-color-dot.active {
+  transform: scale(1.3);
+  border-color: #000;
+  box-shadow: 0 0 0 1px #fff;
+}
+.sticky-theme-dark .sticky-color-dot.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #000;
+}
+
+/* Quick Tools Strip */
+.sticky-quick-strip {
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px dashed rgba(0, 0, 0, 0.09);
+  flex-wrap: wrap;
+}
+.sticky-theme-dark .sticky-quick-strip {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.sticky-pill-btn {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.sticky-pill-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+.sticky-theme-dark .sticky-pill-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.sticky-theme-dark .sticky-pill-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Content Area */
+.sticky-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  overflow: hidden;
+}
+
+.sticky-textarea {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: inherit;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.sticky-textarea::placeholder {
+  color: inherit;
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* Minimized Floating Pill in bottom-right corner */
+.sticky-minimized-pill {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 998;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #fde047;
+  color: #713f12;
+  border: 1px solid #facc15;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: popIn 0.2s ease-out;
+}
+
+.sticky-minimized-pill:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  background: #facc15;
+}
+
+[data-theme='dark'] .sticky-minimized-pill {
+  background: #854d0e;
+  color: #fef08a;
+  border-color: #a16207;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* Badge dot on sticky note icons */
+.sticky-note-toggle-btn {
+  position: relative;
+}
+
+.sticky-note-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+[data-theme='dark'] .sticky-note-badge {
+  box-shadow: 0 0 0 2px #111a21;
+}
+
+.side-dot-badge {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  display: inline-block;
+}
+
+@keyframes popIn {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+
+
 
 
