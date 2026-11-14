@@ -71,6 +71,9 @@ const STICKY_NOTES_KEY = 'my-work-log.sticky-notes.v2';
 const STICKY_POS_KEY = 'my-work-log.sticky-pos.v1';
 const STICKY_MINIMIZED_KEY = 'my-work-log.sticky-minimized.v1';
 const STICKY_OPEN_KEY = 'my-work-log.sticky-open.v1';
+const LOCKED_DAYS_KEY = 'my-work-log.locked-days.v1';
+const UNLOCKED_DAYS_KEY = 'my-work-log.unlocked-days.v1';
+const AUTO_LOCK_PAST_DAYS_KEY = 'my-work-log.auto-lock-past-days.v1';
 
 export type StickyColor = 'yellow' | 'green' | 'blue' | 'pink' | 'purple' | 'dark';
 
@@ -82,6 +85,42 @@ export interface StickyNoteItem {
 }
 
 export type TableDensity = 'compact' | 'normal' | 'relaxed';
+
+const loadLockedDays = (): string[] => {
+  try {
+    const raw = localStorage.getItem(LOCKED_DAYS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter(x => typeof x === 'string');
+    }
+  } catch {
+    // storage fallback
+  }
+  return [];
+};
+
+const loadUnlockedDays = (): string[] => {
+  try {
+    const raw = localStorage.getItem(UNLOCKED_DAYS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter(x => typeof x === 'string');
+    }
+  } catch {
+    // storage fallback
+  }
+  return [];
+};
+
+const loadAutoLockPastDays = (): boolean => {
+  try {
+    const saved = localStorage.getItem(AUTO_LOCK_PAST_DAYS_KEY);
+    if (saved !== null) return saved === 'true';
+  } catch {
+    // storage fallback
+  }
+  return true;
+};
 
 export type VisibleColumns = {
   order: boolean;
@@ -596,6 +635,89 @@ function App() {
     }
     return 1;
   });
+
+  const [lockedDays, setLockedDays] = useState<string[]>(loadLockedDays);
+  const [unlockedDays, setUnlockedDays] = useState<string[]>(loadUnlockedDays);
+  const [autoLockPastDays, setAutoLockPastDays] = useState<boolean>(loadAutoLockPastDays);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOCKED_DAYS_KEY, JSON.stringify(lockedDays));
+    } catch {
+      // storage handled
+    }
+  }, [lockedDays]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(UNLOCKED_DAYS_KEY, JSON.stringify(unlockedDays));
+    } catch {
+      // storage handled
+    }
+  }, [unlockedDays]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_LOCK_PAST_DAYS_KEY, String(autoLockPastDays));
+    } catch {
+      // storage handled
+    }
+  }, [autoLockPastDays]);
+
+  // Auto-lock past entry dates on first load if autoLockPastDays is enabled
+  useEffect(() => {
+    if (autoLockPastDays) {
+      const today = todayISO();
+      const pastDates = Array.from(new Set(entries.map(e => e.date))).filter(
+        d => d < today && !unlockedDays.includes(d)
+      );
+      if (pastDates.length > 0) {
+        setLockedDays(prev => {
+          const nextSet = new Set(prev);
+          let changed = false;
+          pastDates.forEach(d => {
+            if (!nextSet.has(d)) {
+              nextSet.add(d);
+              changed = true;
+            }
+          });
+          return changed ? Array.from(nextSet) : prev;
+        });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isDayLocked = useCallback(
+    (dateStr: string) => {
+      if (lockedDays.includes(dateStr)) return true;
+      if (autoLockPastDays && dateStr < todayISO() && !unlockedDays.includes(dateStr)) {
+        return true;
+      }
+      return false;
+    },
+    [lockedDays, autoLockPastDays, unlockedDays]
+  );
+
+  const isEntryLocked = useCallback(
+    (entry: WorkEntry) => {
+      return Boolean(entry.isLocked || isDayLocked(entry.date));
+    },
+    [isDayLocked]
+  );
+
+  const toggleLockDay = (dateStr: string) => {
+    const currentlyLocked = isDayLocked(dateStr);
+    if (currentlyLocked) {
+      setLockedDays(prev => prev.filter(d => d !== dateStr));
+      setUnlockedDays(prev => Array.from(new Set([...prev, dateStr])));
+      setNotice(`Unlocked ${formatSheetDate(dateStr)}. You can now edit items for this day.`);
+    } else {
+      setLockedDays(prev => Array.from(new Set([...prev, dateStr])));
+      setUnlockedDays(prev => prev.filter(d => d !== dateStr));
+      setNotice(`Locked ${formatSheetDate(dateStr)} against unexpected edits and deletes.`);
+    }
+  };
   const [cloudSyncUrl, setCloudSyncUrl] = useState<string>(() => {
     try {
       return localStorage.getItem(CLOUD_SYNC_URL_KEY) || '';
@@ -855,6 +977,12 @@ function App() {
   };
 
   const toggleLockRow = (entry: WorkEntry) => {
+    if (isDayLocked(entry.date)) {
+      if (window.confirm(`Day ${formatSheetDate(entry.date)} is locked against changes. Unlock this day to allow editing rows?`)) {
+        toggleLockDay(entry.date);
+      }
+      return;
+    }
     const nextLocked = !entry.isLocked;
     setEntries(old =>
       old.map(e => (e.id === entry.id ? { ...e, isLocked: nextLocked, updatedAt: new Date().toISOString() } : e))
@@ -875,8 +1003,8 @@ function App() {
       return;
     }
     const target = entries.find(e => e.id === id);
-    if (target?.isLocked) {
-      setNotice('Cannot edit a locked row.');
+    if (!target || isEntryLocked(target)) {
+      setNotice(target && isDayLocked(target.date) ? 'Cannot edit: this day is locked against unexpected changes.' : 'Cannot edit a locked row.');
       setInlineEditingCell(null);
       return;
     }
@@ -1206,6 +1334,13 @@ function App() {
   }, [view, selectedDate]);
 
   const openNew = (initialActivity?: string | React.MouseEvent) => {
+    if (view === 'day' && isDayLocked(selectedDate)) {
+      if (window.confirm(`Day ${formatSheetDate(selectedDate)} is locked against unexpected edits. Unlock this day to add entries?`)) {
+        toggleLockDay(selectedDate);
+      } else {
+        return;
+      }
+    }
     setEditing(null);
     setForm({
       date: selectedDate,
@@ -1314,9 +1449,17 @@ function App() {
   };
 
   const openEdit = (entry: WorkEntry) => {
-    if (entry.isLocked) {
-      setNotice('This row is locked to prevent edits. Click the lock icon on the row to unlock it first.');
-      return;
+    if (isEntryLocked(entry)) {
+      if (isDayLocked(entry.date)) {
+        if (window.confirm(`Day ${formatSheetDate(entry.date)} is locked against unexpected edits. Unlock this day to make edits?`)) {
+          toggleLockDay(entry.date);
+        } else {
+          return;
+        }
+      } else {
+        setNotice('This row is locked to prevent edits. Click the lock icon on the row to unlock it first.');
+        return;
+      }
     }
     setEditing(entry);
     setForm({
@@ -1542,8 +1685,12 @@ function App() {
   };
 
   const deleteEntry = (entry: WorkEntry) => {
-    if (entry.isLocked) {
-      setNotice('This row is locked. Click the lock icon on the row to unlock it before deleting.');
+    if (isEntryLocked(entry)) {
+      if (isDayLocked(entry.date)) {
+        setNotice(`This day (${formatSheetDate(entry.date)}) is locked. Unlock the day before deleting entries.`);
+      } else {
+        setNotice('This row is locked. Click the lock icon on the row to unlock it before deleting.');
+      }
       return;
     }
     const snippet = entry.activity.length > 40 ? `${entry.activity.slice(0, 40)}...` : entry.activity;
@@ -1566,9 +1713,9 @@ function App() {
     const visibleSelected = visibleEntries.filter(e => selectedRowIds.has(e.id));
     if (visibleSelected.length === 0) return;
 
-    const lockedCount = visibleSelected.filter(e => e.isLocked).length;
+    const lockedCount = visibleSelected.filter(e => isEntryLocked(e)).length;
     if (lockedCount > 0) {
-      setNotice(`${lockedCount} of the selected rows are locked. Unlock them first to delete.`);
+      setNotice(`${lockedCount} of the selected rows are locked (by day or row lock). Unlock them first to delete.`);
       return;
     }
 
@@ -1585,6 +1732,13 @@ function App() {
   };
 
   const copyEntryToDate = (entry: WorkEntry) => {
+    if (isDayLocked(selectedDate)) {
+      if (window.confirm(`Selected date (${formatSheetDate(selectedDate)}) is locked. Unlock this day to duplicate entry here?`)) {
+        toggleLockDay(selectedDate);
+      } else {
+        return;
+      }
+    }
     const now = new Date().toISOString();
     setEntries(old => [
       ...old,
@@ -1601,6 +1755,13 @@ function App() {
 
   const promotePlanToToday = (entry: WorkEntry) => {
     const today = todayISO();
+    if (isDayLocked(today)) {
+      if (window.confirm(`Today (${formatSheetDate(today)}) is locked. Unlock today to carry forward this plan?`)) {
+        toggleLockDay(today);
+      } else {
+        return;
+      }
+    }
     const now = new Date().toISOString();
     const promotedEntry: WorkEntry = {
       ...entry,
@@ -1618,6 +1779,15 @@ function App() {
   };
 
   const promoteAllPlansToToday = () => {
+    const today = todayISO();
+    if (isDayLocked(today)) {
+      if (window.confirm(`Today (${formatSheetDate(today)}) is locked. Unlock today to carry forward plans?`)) {
+        toggleLockDay(today);
+      } else {
+        return;
+      }
+    }
+
     // Collect all Tomorrow's Plan from the current visible view / selected date
     const plans = (view === 'day' ? dayEntries : visibleEntries).filter(
       e => e.taskCategory === "B Tomorrow's Plan"
@@ -1627,7 +1797,6 @@ function App() {
       return;
     }
 
-    const today = todayISO();
     const now = new Date().toISOString();
     const promotedList: WorkEntry[] = plans.map(p => ({
       ...p,
@@ -1650,7 +1819,7 @@ function App() {
 
     const currentEntry = visibleEntries[index];
     const targetEntry = visibleEntries[targetIndex];
-    if (currentEntry.isLocked || targetEntry.isLocked) {
+    if (isEntryLocked(currentEntry) || isEntryLocked(targetEntry)) {
       setNotice('Cannot reorder rows when either row is locked.');
       return;
     }
@@ -1674,7 +1843,7 @@ function App() {
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
     const item = entries.find(x => x.id === id);
-    if (item?.isLocked) {
+    if (!item || isEntryLocked(item)) {
       e.preventDefault();
       return;
     }
@@ -1706,7 +1875,7 @@ function App() {
 
     const sourceItem = entries.find(x => x.id === draggedId);
     const targetItem = entries.find(x => x.id === targetId);
-    if (sourceItem?.isLocked || targetItem?.isLocked) {
+    if (!sourceItem || !targetItem || isEntryLocked(sourceItem) || isEntryLocked(targetItem)) {
       setNotice('Cannot reorder locked rows.');
       setDraggedId(null);
       setDropTarget(null);
@@ -1738,7 +1907,7 @@ function App() {
   };
 
   const updateOutcome = (entry: WorkEntry, workDone: WorkOutcome) => {
-    if (entry.isLocked) {
+    if (isEntryLocked(entry)) {
       setNotice('Cannot modify outcome of a locked row.');
       return;
     }
@@ -1806,13 +1975,16 @@ function App() {
           modules,
           entries,
           notes: stickyNotes,
+          lockedDays,
+          unlockedDays,
+          autoLockPastDays,
         },
         null,
         2
       ),
       'application/json'
     );
-    setNotice('JSON backup exported (includes internal remarks and notes).');
+    setNotice('JSON backup exported (includes internal remarks, notes, and locked days).');
   };
 
   const exportCSV = () => {
@@ -1927,6 +2099,24 @@ function App() {
         }
       }
 
+      if (parsed && Array.isArray(parsed.lockedDays)) {
+        const validDates = parsed.lockedDays.filter((d: unknown) => typeof d === 'string');
+        if (validDates.length > 0) {
+          setLockedDays(old => Array.from(new Set([...old, ...validDates])));
+        }
+      }
+
+      if (parsed && Array.isArray(parsed.unlockedDays)) {
+        const validDates = parsed.unlockedDays.filter((d: unknown) => typeof d === 'string');
+        if (validDates.length > 0) {
+          setUnlockedDays(old => Array.from(new Set([...old, ...validDates])));
+        }
+      }
+
+      if (parsed && typeof parsed.autoLockPastDays === 'boolean') {
+        setAutoLockPastDays(parsed.autoLockPastDays);
+      }
+
       setNotice(`Imported ${normalized.length} entries. Existing matching IDs were updated.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Could not import backup.');
@@ -1951,6 +2141,9 @@ function App() {
         modules,
         entries,
         notes: stickyNotes,
+        lockedDays,
+        unlockedDays,
+        autoLockPastDays,
       };
 
       // Use text/plain to avoid CORS preflight options block with Google Apps Script
@@ -2020,6 +2213,24 @@ function App() {
         if (Array.isArray(parsed.notes) && parsed.notes.length > 0) {
           setStickyNotes(parsed.notes);
         }
+      }
+
+      if (parsed && Array.isArray(parsed.lockedDays)) {
+        const validDates = parsed.lockedDays.filter((d: unknown) => typeof d === 'string');
+        if (validDates.length > 0) {
+          setLockedDays(old => Array.from(new Set([...old, ...validDates])));
+        }
+      }
+
+      if (parsed && Array.isArray(parsed.unlockedDays)) {
+        const validDates = parsed.unlockedDays.filter((d: unknown) => typeof d === 'string');
+        if (validDates.length > 0) {
+          setUnlockedDays(old => Array.from(new Set([...old, ...validDates])));
+        }
+      }
+
+      if (parsed && typeof parsed.autoLockPastDays === 'boolean') {
+        setAutoLockPastDays(parsed.autoLockPastDays);
       }
 
       setNotice(`Restored ${normalized.length} entries from personal cloud backup!`);
@@ -2296,6 +2507,21 @@ function App() {
               <button className="secondary-button" onClick={() => setSelectedDate(todayISO())}>
                 Today
               </button>
+              {view === 'day' && (
+                <button
+                  type="button"
+                  className={`secondary-button lock-day-btn ${isDayLocked(selectedDate) ? 'day-is-locked' : ''}`}
+                  onClick={() => toggleLockDay(selectedDate)}
+                  title={
+                    isDayLocked(selectedDate)
+                      ? `Day is locked against edits. Click to unlock ${formatSheetDate(selectedDate)}`
+                      : `Lock all entries for ${formatSheetDate(selectedDate)} to prevent accidental changes`
+                  }
+                >
+                  {isDayLocked(selectedDate) ? <Lock size={14} /> : <Unlock size={14} />}
+                  <span>{isDayLocked(selectedDate) ? 'Day Locked' : 'Lock Day'}</span>
+                </button>
+              )}
             </div>
           </section>
 
@@ -2367,6 +2593,12 @@ function App() {
                         : monthLabel(selectedDate)}
                     </span>
                   </span>
+                  {view === 'day' && isDayLocked(selectedDate) && (
+                    <span className="day-locked-badge" title="This day is locked against unexpected edits">
+                      <Lock size={12} />
+                      <span>Day Locked</span>
+                    </span>
+                  )}
                 </div>
                 <p>
                   {visibleEntries.length} {visibleEntries.length === 1 ? 'entry' : 'entries'} shown
@@ -2562,6 +2794,27 @@ function App() {
               </div>
             </div>
 
+            {view === 'day' && isDayLocked(selectedDate) && (
+              <div className="day-locked-alert-banner">
+                <div className="day-locked-alert-content">
+                  <Lock size={16} className="day-locked-alert-icon" />
+                  <div>
+                    <strong>Day is locked ({formatSheetDate(selectedDate)}).</strong>
+                    <span> Items on this date are protected from accidental edits, reordering, or deletion.</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button banner-unlock-day-btn"
+                  onClick={() => toggleLockDay(selectedDate)}
+                  title="Unlock this day to allow editing"
+                >
+                  <Unlock size={13} />
+                  <span>Unlock Day</span>
+                </button>
+              </div>
+            )}
+
             <div className="filters-row">
               <div className="search-box">
                 <Search size={17} />
@@ -2753,7 +3006,9 @@ function App() {
                             group.entries.map(entry => {
                               const index = entryIndexMap.get(entry.id) ?? 0;
                               const isSelected = selectedRowIds.has(entry.id);
-                              const isLocked = Boolean(entry.isLocked);
+                              const isDayLevelLocked = isDayLocked(entry.date);
+                              const isRowLockedOnly = Boolean(entry.isLocked);
+                              const isLocked = isRowLockedOnly || isDayLevelLocked;
                               const isEditingHours = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'hours';
                               const isEditingRef = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'reference';
                               const isEditingActivity = inlineEditingCell?.id === entry.id && inlineEditingCell.field === 'activity';
@@ -2840,9 +3095,12 @@ function App() {
                                         {entry.taskCategory}
                                       </span>
                                       {isLocked && (
-                                        <span className="row-locked-badge" title="Row locked against edits and reordering">
+                                        <span
+                                          className="row-locked-badge"
+                                          title={isDayLevelLocked ? "Day is locked against edits and reordering" : "Row locked against edits and reordering"}
+                                        >
                                           <Lock size={10} />
-                                          <span>Locked</span>
+                                          <span>{isDayLevelLocked ? 'Day Locked' : 'Locked'}</span>
                                         </span>
                                       )}
                                       {view === 'month' && (
@@ -2951,7 +3209,7 @@ function App() {
                                           type="button"
                                           disabled={isLocked}
                                           className={`outcome-pill-btn ${getOutcomeClass(entry.workDone)} ${isLocked ? 'locked' : ''}`}
-                                          title={isLocked ? "Row is locked" : "Click to change outcome"}
+                                          title={isLocked ? (isDayLevelLocked ? "Day is locked against changes" : "Row is locked") : "Click to change outcome"}
                                           onClick={() => {
                                             if (!isLocked) {
                                               setActiveOutcomeMenuId(prev => (prev === entry.id ? null : entry.id));
@@ -3009,7 +3267,7 @@ function App() {
                                   {visibleColumns.hours && (
                                     <td
                                       className={`editable-cell ${isLocked ? 'locked-cell' : ''}`}
-                                      title={isLocked ? "Row is locked" : "Click to fast-edit hours"}
+                                      title={isLocked ? (isDayLevelLocked ? "Day is locked against edits" : "Row is locked") : "Click to fast-edit hours"}
                                       onClick={() => {
                                         if (!isLocked && !isEditingHours) {
                                           setInlineEditingCell({
@@ -3067,7 +3325,7 @@ function App() {
                                   {visibleColumns.reference && (
                                     <td
                                       className={`editable-cell ${isLocked ? 'locked-cell' : ''}`}
-                                      title={isLocked ? "Row is locked" : "Click to fast-edit ticket reference"}
+                                      title={isLocked ? (isDayLevelLocked ? "Day is locked against edits" : "Row is locked") : "Click to fast-edit ticket reference"}
                                       onClick={() => {
                                         if (!isLocked && !isEditingRef) {
                                           setInlineEditingCell({
@@ -3147,7 +3405,7 @@ function App() {
                                         <button
                                           type="button"
                                           className="tiny-action lock-action-btn is-locked-btn"
-                                          title="Row is locked. Click to unlock"
+                                          title={isDayLevelLocked ? "Day is locked. Click to unlock day" : "Row is locked. Click to unlock"}
                                           onClick={() => toggleLockRow(entry)}
                                         >
                                           <Lock size={15} />
@@ -3186,7 +3444,7 @@ function App() {
                                               }}
                                             >
                                               {isLocked ? <Unlock size={14} /> : <Lock size={14} />}
-                                              <span>{isLocked ? 'Unlock Row' : 'Lock Row'}</span>
+                                              <span>{isDayLevelLocked ? 'Unlock Day' : isLocked ? 'Unlock Row' : 'Lock Row'}</span>
                                             </button>
                                             <button
                                               type="button"
@@ -3704,6 +3962,79 @@ function App() {
                   style={{ width: '90px', padding: '5px 8px', fontSize: '12px', fontWeight: 700 }}
                 />
               </label>
+            </div>
+
+            {/* ACCIDENTAL EDIT PROTECTION (DAY & ROW LOCK) */}
+            <div className="lock-protection-card">
+              <div className="lock-protection-header">
+                <div className="lock-protection-title">
+                  <Lock size={19} className="lock-card-icon" />
+                  <div>
+                    <strong>Accidental Edit Protection</strong>
+                    <span>Lock days or individual rows to prevent unexpected changes or deletes</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="date-format-setting" style={{ marginTop: '8px', marginBottom: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoLockPastDays}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      setAutoLockPastDays(checked);
+                      if (checked) {
+                        setUnlockedDays([]);
+                        const today = todayISO();
+                        const pastDates = Array.from(new Set(entries.map(ent => ent.date))).filter(d => d < today);
+                        setLockedDays(prev => Array.from(new Set([...prev, ...pastDates])));
+                        setNotice(`Auto-lock enabled. All past days (${pastDates.length}) are now locked.`);
+                      } else {
+                        setNotice('Auto-lock disabled. Past days will remain editable unless manually locked.');
+                      }
+                    }}
+                    style={{ width: '16px', height: '16px', accentColor: '#2563eb', cursor: 'pointer' }}
+                  />
+                  <div>
+                    <strong>Automatically lock previous days on app load</strong>
+                    <span style={{ display: 'block', fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                      Protects past completed work logs against unintended modifications, reordering, or deletion.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              <div className="lock-protection-actions">
+                <button
+                  type="button"
+                  className="secondary-button small-btn"
+                  onClick={() => {
+                    const today = todayISO();
+                    const pastDates = Array.from(new Set(entries.map(ent => ent.date))).filter(d => d < today);
+                    setLockedDays(prev => Array.from(new Set([...prev, ...pastDates])));
+                    setUnlockedDays([]);
+                    setNotice(`Locked all past work days (${pastDates.length} days).`);
+                  }}
+                  title="Lock all past dates right now"
+                >
+                  <Lock size={13} /> Lock all past days
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button small-btn"
+                  onClick={() => {
+                    const allDates = Array.from(new Set(entries.map(ent => ent.date)));
+                    setLockedDays([]);
+                    setUnlockedDays(allDates);
+                    setAutoLockPastDays(false);
+                    setNotice('Unlocked all days. Entries can now be freely edited.');
+                  }}
+                  title="Unlock all days"
+                >
+                  <Unlock size={13} /> Unlock all days
+                </button>
+              </div>
             </div>
 
             {/* CLOUD SYNC SECTION */}

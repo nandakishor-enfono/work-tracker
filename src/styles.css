@@ -5931,6 +5931,204 @@ tfoot {
   color: #2dd4bf;
 }
 
+/* ==========================================================================
+   DAY LOCKING & ACCIDENTAL EDIT PROTECTION STYLES
+   ========================================================================== */
+
+/* Lock Day Button in Date Toolbar */
+.lock-day-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 8px 12px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.lock-day-btn.day-is-locked {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(185, 28, 28, 0.08);
+}
+
+.lock-day-btn.day-is-locked:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+  color: #991b1b;
+}
+
+[data-theme='dark'] .lock-day-btn.day-is-locked {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+[data-theme='dark'] .lock-day-btn.day-is-locked:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fee2e2;
+}
+
+/* Day Locked Badge in Panel Heading */
+.day-locked-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  padding: 2px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+[data-theme='dark'] .day-locked-badge {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+/* Day Locked Alert Banner */
+.day-locked-alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  margin: 12px 0 14px 0;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  font-size: 12px;
+  animation: fadeIn 0.2s ease;
+}
+
+.day-locked-alert-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.day-locked-alert-icon {
+  color: #dc2626;
+  flex-shrink: 0;
+}
+
+.banner-unlock-day-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  white-space: nowrap;
+  background: #ffffff;
+  border-color: #fca5a5;
+  color: #991b1b;
+  transition: all 0.15s ease;
+}
+
+.banner-unlock-day-btn:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+  color: #7f1d1d;
+}
+
+[data-theme='dark'] .day-locked-alert-banner {
+  background: rgba(153, 27, 27, 0.18);
+  border-color: rgba(239, 68, 68, 0.28);
+  color: #fca5a5;
+}
+
+[data-theme='dark'] .day-locked-alert-icon {
+  color: #f87171;
+}
+
+[data-theme='dark'] .banner-unlock-day-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fee2e2;
+}
+
+[data-theme='dark'] .banner-unlock-day-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #ffffff;
+}
+
+/* Lock Protection Card in Settings */
+.lock-protection-card {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 11px;
+  padding: 15px;
+  margin-bottom: 14px;
+}
+
+.lock-protection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.lock-protection-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lock-protection-title .lock-card-icon {
+  color: #dc2626;
+  flex-shrink: 0;
+}
+
+.lock-protection-title strong {
+  display: block;
+  font-size: 13px;
+  color: #991b1b;
+}
+
+.lock-protection-title span {
+  display: block;
+  font-size: 11px;
+  color: #b91c1c;
+  margin-top: 1px;
+}
+
+.lock-protection-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+[data-theme='dark'] .lock-protection-card {
+  background: rgba(153, 27, 27, 0.15);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+[data-theme='dark'] .lock-protection-title strong {
+  color: #fca5a5;
+}
+
+[data-theme='dark'] .lock-protection-title span {
+  color: #f87171;
+}
+
+[data-theme='dark'] .lock-protection-title .lock-card-icon {
+  color: #f87171;
+}
+
+
 
 
 
