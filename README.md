@@ -15,6 +15,14 @@ A personal, local-first daily work tracker built with React, TypeScript, and Vit
   7. `Time Spent (hrs)` (Decimal hours e.g. `2.00`, `1.00`, or blank for plans)
   8. `Type` (`Bug Fixing`, `Development`, `Investigation`, `Meeting / Discussion`, `Testing`, `Training`, or blank)
   9. `Ticket / Reference / Remarks` (e.g. `PS-1585 - Posting screens Create/Edit`)
+- **GitHub Release Notes Generator**:
+  - Automatically compiles and formats completed deliverables (`A Completed`) into GitHub-ready Release Notes and Changelogs.
+  - Smart categorization under main modules (**Shipping**, **Administration**, **Inventory**, etc.) with custom module icons and summary statistics.
+  - Flexible timeframe filtering: **Day**, **Week** (ISO week range), **Month**, **Custom Date Range**, or **All-Time**.
+  - Interactive **Markdown Editor** + authentic **GitHub Preview** (including side-by-side **Split View**).
+  - Formatting toolbar (headings, bullets, checkboxes, bold, issue references `#123`, quote callouts).
+  - Task selection checklist drawer to selectively include/exclude tasks.
+  - One-click **Copy for GitHub** and **Download .md** buttons.
 - **Row Reordering (Custom Row Positioning)**: Change row positions directly using the Move Up / Move Down arrow buttons or drag-and-drop handles. Rows paste into Google Sheets in your exact custom sequence.
 - **Internal App Remarks (Private / App-Only)**: A personal notes field in the app for your own reminders and tracking that is **never copied** to the company Google Sheet.
 - **Daily and Monthly Views**: View by selected day or browse total hours and active days for the month.

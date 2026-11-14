@@ -8,8 +8,9 @@ import {
   ArrowUp, ArrowDown, GripVertical, ArrowRightCircle, ListPlus, List,
   Cloud, CloudUpload, Lock, Unlock, CheckSquare, Square,
   MoreHorizontal, ChevronDown, Columns, Layers, RotateCcw,
-  Minus
+  Minus, GitPullRequest
 } from 'lucide-react';
+import { ReleaseNotesModal } from './ReleaseNotesModal';
 
 export type WorkOutcome =
   | ''
@@ -152,14 +153,14 @@ export const workTypes: WorkType[] = [
   'Training',
 ];
 
-const todayISO = () => {
+export const todayISO = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-const makeId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+export const makeId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const formatSheetDate = (iso: string) => {
+export const formatSheetDate = (iso: string) => {
   if (!iso || typeof iso !== 'string') return '';
   const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
   if (isNaN(d.getTime())) return iso;
@@ -170,21 +171,21 @@ const formatSheetDate = (iso: string) => {
   return `${dd}-${mmm}-${yy}`;
 };
 
-const prettyDate = (iso: string, options: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) => {
+export const prettyDate = (iso: string, options: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) => {
   if (!iso || typeof iso !== 'string') return '';
   const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
   return isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, options);
 };
 
-const monthKey = (iso: string) => (iso && typeof iso === 'string' ? iso.slice(0, 7) : todayISO().slice(0, 7));
+export const monthKey = (iso: string) => (iso && typeof iso === 'string' ? iso.slice(0, 7) : todayISO().slice(0, 7));
 
-const monthLabel = (iso: string) => {
+export const monthLabel = (iso: string) => {
   const key = monthKey(iso);
   const d = new Date(`${key}-15T12:00:00`);
   return isNaN(d.getTime()) ? key : d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 };
 
-const durationLabel = (hours: number | string) => {
+export const durationLabel = (hours: number | string) => {
   const num = Number.isFinite(Number(hours)) ? Math.max(0, Number(hours)) : 0;
   const minutes = Math.round(num * 60);
   if (!minutes) return '0 min';
@@ -555,6 +556,7 @@ function App() {
   const [editing, setEditing] = useState<WorkEntry | null>(null);
   const [notice, setNotice] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
   const [includeHeadersInCopy, setIncludeHeadersInCopy] = useState(false);
   const [leftAlignNoAndDate, setLeftAlignNoAndDate] = useState<boolean>(() => {
     try {
@@ -959,19 +961,21 @@ function App() {
           setActiveMoreMenuId(null);
         } else if (showColumnsMenu) {
           setShowColumnsMenu(false);
-        } else if (showSticky && !isStickyMinimized) {
-          setIsStickyMinimized(true);
+        } else if (showReleaseNotes) {
+          setShowReleaseNotes(false);
         } else if (showForm) {
           setShowForm(false);
           setEditing(null);
         } else if (showSettings) {
           setShowSettings(false);
+        } else if (showSticky && !isStickyMinimized) {
+          setIsStickyMinimized(true);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showForm, showSettings, showSticky, isStickyMinimized, inlineEditingCell, activeOutcomeMenuId, activeMoreMenuId, showColumnsMenu]);
+  }, [showForm, showSettings, showReleaseNotes, showSticky, isStickyMinimized, inlineEditingCell, activeOutcomeMenuId, activeMoreMenuId, showColumnsMenu]);
 
   useEffect(() => {
     try {
@@ -2080,6 +2084,20 @@ function App() {
         </button>
 
         <button
+          className={`nav-item ${showReleaseNotes ? 'active' : ''}`}
+          onClick={() => setShowReleaseNotes(true)}
+          title="GitHub Release Notes"
+        >
+          <GitPullRequest size={18} />
+          {!sidebarCollapsed && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <span>Release Notes</span>
+              <span className="side-release-badge" title="Generate GitHub Release Notes">GH</span>
+            </div>
+          )}
+        </button>
+
+        <button
           className={`nav-item ${showSticky && !isStickyMinimized ? 'active' : ''}`}
           onClick={() => {
             setShowSticky(true);
@@ -2213,6 +2231,14 @@ function App() {
               </p>
             </div>
             <div className="heading-actions">
+              <button
+                className="secondary-button release-notes-btn"
+                title="Generate GitHub-formatted release notes for completed tasks"
+                onClick={() => setShowReleaseNotes(true)}
+              >
+                <GitPullRequest size={16} />
+                <span>GitHub Release Notes</span>
+              </button>
               <button
                 className="primary-button sheet-btn"
                 title="Copy all currently filtered tasks in Google Sheet format"
@@ -3869,6 +3895,16 @@ function App() {
           </section>
         </div>
       )}
+
+      {/* GITHUB RELEASE NOTES GENERATOR MODAL */}
+      <ReleaseNotesModal
+        isOpen={showReleaseNotes}
+        onClose={() => setShowReleaseNotes(false)}
+        entries={entries}
+        modules={modules}
+        currentDate={selectedDate}
+        setNotice={setNotice}
+      />
 
       {/* FLOATING STICKY NOTE */}
       {showSticky && (
