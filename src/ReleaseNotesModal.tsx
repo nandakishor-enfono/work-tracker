@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  GitPullRequest, CalendarDays, ChevronLeft, ChevronRight,
+  GitPullRequest, Tag, CalendarDays, ChevronLeft, ChevronRight,
   Copy, Check, Download, X, RefreshCw, Eye, Edit3, Columns,
   Sparkles, Clock3, Package,
   Code, CheckCircle2, ChevronDown, ListFilter, AlertCircle,
@@ -10,7 +10,7 @@ import type { WorkEntry } from './App';
 import { formatSheetDate, prettyDate, monthLabel, todayISO } from './App';
 
 export type ReleaseTimeframe = 'day' | 'week' | 'month' | 'custom' | 'all';
-export type ReleaseFormatStyle = 'clean-bullets' | 'clean-plain' | 'github-changelog' | 'detailed-table';
+export type ReleaseFormatStyle = 'subfeature-grouped' | 'clean-bullets' | 'clean-plain' | 'github-changelog';
 
 export interface ReleaseNotesModalProps {
   isOpen: boolean;
@@ -93,6 +93,34 @@ export const isMeetingTask = (task: WorkEntry) => {
   return /\b(meeting|discussion|standup|sync|call|catchup|sync-up|daily sync)\b/i.test(act);
 };
 
+interface ParsedTaskItem {
+  subfeature: string;
+  description: string;
+}
+
+export const parseTaskItem = (task: WorkEntry): ParsedTaskItem => {
+  const act = (task.activity || '').trim();
+  const remarks = (task.appRemarks || '').trim();
+
+  // Case 1: "Subfeature / Screen: Description"
+  if (act.includes(':')) {
+    const colonIdx = act.indexOf(':');
+    const sub = act.slice(0, colonIdx).trim();
+    const desc = act.slice(colonIdx + 1).trim();
+    if (desc) {
+      return { subfeature: sub, description: desc };
+    }
+  }
+
+  // Case 2: activity is the screen/subfeature name and remarks has description
+  if (remarks) {
+    return { subfeature: act, description: remarks };
+  }
+
+  // Case 3: Direct item under module
+  return { subfeature: '', description: act };
+};
+
 export function ReleaseNotesModal({
   isOpen,
   onClose,
@@ -141,16 +169,15 @@ export function ReleaseNotesModal({
     });
   }, [allAvailableModules]);
 
-  // Formatting options - defaults specifically tuned to user's preferred format:
-  // Clean module format, no meetings, no hours, bold feature titles
-  const [formatStyle, setFormatStyle] = useState<ReleaseFormatStyle>('clean-bullets');
-  const [releaseTag, setReleaseTag] = useState('');
+  // Formatting options tuned specifically to user's exact template:
+  // Primary default: 'subfeature-grouped' (## Module / ### Screen / - Description)
+  const [formatStyle, setFormatStyle] = useState<ReleaseFormatStyle>('subfeature-grouped');
+  const [releaseTag, setReleaseTag] = useState('v1.0.11');
   const [isTagCustom, setIsTagCustom] = useState(false);
   const [includeMeetings, setIncludeMeetings] = useState(false); // DO NOT INCLUDE MEETINGS BY DEFAULT
   const [includeHours, setIncludeHours] = useState(false);       // HOURS NOT NEEDED BY DEFAULT
-  const [boldTitles, setBoldTitles] = useState(true);           // Feature Title: Description
+  const [boldTitles, setBoldTitles] = useState(true);
   const [includeReferences, setIncludeReferences] = useState(false);
-  const [includeSummary, setIncludeSummary] = useState(false);
   const [includeModuleEmojis, setIncludeModuleEmojis] = useState(false);
 
   // Excluded tasks (for task selection checklist)
@@ -175,8 +202,8 @@ export function ReleaseNotesModal({
         const fullPretty = prettyDate(selectedDay, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
         return {
           label: `${fullPretty} (${dStr})`,
-          defaultTag: `release-${selectedDay}`,
-          defaultTitle: `Release: ${dStr}`,
+          defaultTag: `v1.0.11`,
+          defaultTitle: `Release Notes – v1.0.11`,
         };
       }
       case 'week': {
@@ -184,16 +211,16 @@ export function ReleaseNotesModal({
         const endStr = formatSheetDate(weekInfo.end);
         return {
           label: `Week ${weekInfo.weekNum} (${startStr} – ${endStr})`,
-          defaultTag: `v1.0.0-w${weekInfo.weekNum}`,
-          defaultTitle: `Release: Week ${weekInfo.weekNum} (${startStr} – ${endStr})`,
+          defaultTag: `v1.0.11`,
+          defaultTitle: `Release Notes – v1.0.11`,
         };
       }
       case 'month': {
         const mLabel = monthLabel(selectedMonth);
         return {
           label: mLabel,
-          defaultTag: `v1.0.0-${selectedMonth}`,
-          defaultTitle: `Release: ${mLabel}`,
+          defaultTag: `v1.0.11`,
+          defaultTitle: `Release Notes – v1.0.11`,
         };
       }
       case 'custom': {
@@ -201,16 +228,16 @@ export function ReleaseNotesModal({
         const e = formatSheetDate(customEndDate);
         return {
           label: `${s} to ${e}`,
-          defaultTag: `release-${customStartDate}-to-${customEndDate}`,
-          defaultTitle: `Release (${s} to ${e})`,
+          defaultTag: `v1.0.11`,
+          defaultTitle: `Release Notes – v1.0.11`,
         };
       }
       case 'all':
       default:
         return {
           label: 'All-Time Completed Tasks',
-          defaultTag: 'v1.0.0-changelog',
-          defaultTitle: 'Full Release Changelog',
+          defaultTag: 'v1.0.11',
+          defaultTitle: 'Release Notes – v1.0.11',
         };
     }
   }, [timeframe, selectedDay, selectedMonth, weekInfo, customStartDate, customEndDate]);
@@ -300,7 +327,7 @@ export function ReleaseNotesModal({
       }
     }
 
-    return style === 'bullets' ? `* ${formattedContent}` : formattedContent;
+    return style === 'bullets' ? `- ${formattedContent}` : formattedContent;
   };
 
   // Generate Release Notes Markdown / Text
@@ -316,13 +343,13 @@ export function ReleaseNotesModal({
     });
 
     const moduleKeys = Object.keys(tasksByModule).sort((a, b) => {
-      // Prioritize Administration, Shipping, General Ledger first
+      // Prioritize Administration, General Ledger, Shipping first
       if (a === 'Administration') return -1;
       if (b === 'Administration') return 1;
-      if (a === 'Shipping') return -1;
-      if (b === 'Shipping') return 1;
       if (a === 'General Ledger') return -1;
       if (b === 'General Ledger') return 1;
+      if (a === 'Shipping') return -1;
+      if (b === 'Shipping') return 1;
       return a.localeCompare(b);
     });
 
@@ -331,41 +358,95 @@ export function ReleaseNotesModal({
     }
 
     const lines: string[] = [];
+    const mainTitle = `# Release Notes – ${releaseTag || 'v1.0.11'}`;
 
-    // Optional Top Header & Summary Banner
-    if (includeSummary) {
-      const title = releaseTag ? `${periodDetails.defaultTitle} (${releaseTag})` : periodDetails.defaultTitle;
-      lines.push(`# 🚀 ${title}`);
-      lines.push('');
-      lines.push(`> **Release Period**: ${periodDetails.label}  `);
-      lines.push(`> **Completed Deliverables**: **${totalCount}** tasks across **${moduleKeys.length}** modules${includeHours ? ` · **${activeTasks.reduce((s, t) => s + (Number(t.hours) || 0), 0).toFixed(2)} hrs** logged` : ''}`);
-      lines.push('');
-      lines.push('---');
-      lines.push('');
-    }
-
-    if (formatStyle === 'clean-plain') {
+    if (formatStyle === 'subfeature-grouped') {
       // EXACT FORMAT AS REQUESTED:
-      // Module Name
-      // Feature Title: Description
-      moduleKeys.forEach((mod, idx) => {
-        if (idx > 0) lines.push('');
-        const modHeader = includeModuleEmojis ? `${getModuleEmoji(mod)} ${mod}` : mod;
-        lines.push(modHeader);
-        tasksByModule[mod].forEach(task => {
-          lines.push(formatTaskLine(task, 'plain', boldTitles, includeReferences, includeHours));
+      // # Release Notes – v1.0.11
+      // ## Administration
+      // - Feature description...
+      // ## General Ledger
+      // ### Chart of Accounts
+      // - Feature description...
+      lines.push(mainTitle);
+      lines.push('');
+
+      moduleKeys.forEach((mod, modIdx) => {
+        if (modIdx > 0) lines.push('');
+        const modHeading = includeModuleEmojis ? `## ${getModuleEmoji(mod)} ${mod}` : `## ${mod}`;
+        lines.push(modHeading);
+
+        const modTasks = tasksByModule[mod];
+        const directItems: string[] = [];
+        const subfeatures: { name: string; items: string[] }[] = [];
+        const subfeatureMap = new Map<string, string[]>();
+
+        modTasks.forEach(task => {
+          const { subfeature, description } = parseTaskItem(task);
+          const refSuffix = includeReferences && task.reference ? ` (#${task.reference.replace(/^#/, '')})` : '';
+          const hourSuffix = includeHours && task.hours ? ` (${Number(task.hours).toFixed(2)} hrs)` : '';
+          const fullDesc = `${description}${refSuffix}${hourSuffix}`;
+
+          if (!subfeature) {
+            directItems.push(fullDesc);
+          } else {
+            if (!subfeatureMap.has(subfeature)) {
+              const list: string[] = [];
+              subfeatureMap.set(subfeature, list);
+              subfeatures.push({ name: subfeature, items: list });
+            }
+            subfeatureMap.get(subfeature)!.push(fullDesc);
+          }
+        });
+
+        // Direct items under ## Module (e.g. ## Administration)
+        directItems.forEach(item => {
+          const parts = item.split(/\r?\n/).map(l => l.trim().replace(/^[-*•]\s*/, '')).filter(Boolean);
+          if (parts.length > 1) {
+            parts.forEach(p => lines.push(`- ${p}`));
+          } else {
+            lines.push(`- ${item}`);
+          }
+        });
+
+        // Subfeatures under ### Subfeature (e.g. ## General Ledger -> ### Chart of Accounts)
+        subfeatures.forEach((sub, sIdx) => {
+          if (directItems.length > 0 || sIdx > 0) {
+            lines.push('');
+          }
+          lines.push(`### ${sub.name}`);
+          sub.items.forEach(item => {
+            const parts = item.split(/\r?\n/).map(l => l.trim().replace(/^[-*•]\s*/, '')).filter(Boolean);
+            if (parts.length > 1) {
+              parts.forEach(p => lines.push(`- ${p}`));
+            } else {
+              lines.push(`- ${item}`);
+            }
+          });
         });
       });
     } else if (formatStyle === 'clean-bullets') {
-      // CLEAN GITHUB MARKDOWN FORMAT:
-      // ### Module Name
-      // * **Feature Title**: Description
+      // Clean Module Bullets: ### Module \n * **Title**: Description
+      lines.push(mainTitle);
+      lines.push('');
       moduleKeys.forEach((mod, idx) => {
         if (idx > 0) lines.push('');
         const modHeader = includeModuleEmojis ? `### ${getModuleEmoji(mod)} ${mod}` : `### ${mod}`;
         lines.push(modHeader);
         tasksByModule[mod].forEach(task => {
           lines.push(formatTaskLine(task, 'bullets', boldTitles, includeReferences, includeHours));
+        });
+      });
+    } else if (formatStyle === 'clean-plain') {
+      // Plain Text Format: Module \n Feature Title: Description
+      lines.push(`Release Notes – ${releaseTag || 'v1.0.11'}`);
+      lines.push('');
+      moduleKeys.forEach((mod, idx) => {
+        if (idx > 0) lines.push('');
+        const modHeader = includeModuleEmojis ? `${getModuleEmoji(mod)} ${mod}` : mod;
+        lines.push(modHeader);
+        tasksByModule[mod].forEach(task => {
+          lines.push(formatTaskLine(task, 'plain', boldTitles, includeReferences, includeHours));
         });
       });
     } else if (formatStyle === 'github-changelog') {
@@ -383,31 +464,6 @@ export function ReleaseNotesModal({
         lines.push('');
       });
       lines.push('**Full Changelog**: https://github.com/org/repo/commits/' + (releaseTag || 'main'));
-    } else {
-      // Detailed Table format
-      const title = releaseTag ? `${periodDetails.defaultTitle} (${releaseTag})` : periodDetails.defaultTitle;
-      lines.push(`# 🚀 ${title}`);
-      lines.push('');
-      moduleKeys.forEach(mod => {
-        lines.push(`## ${getModuleEmoji(mod)} ${mod}`);
-        lines.push('');
-        tasksByModule[mod].forEach(task => {
-          lines.push(formatTaskLine(task, 'bullets', true, includeReferences, includeHours));
-        });
-        lines.push('');
-      });
-
-      if (includeHours) {
-        lines.push('---');
-        lines.push('### 📊 Module Summary Table');
-        lines.push('| Module | Deliverables | Time Spent |');
-        lines.push('| :--- | :---: | :---: |');
-        moduleKeys.forEach(mod => {
-          const tasks = tasksByModule[mod];
-          const mHrs = tasks.reduce((sum, t) => sum + (Number(t.hours) || 0), 0);
-          lines.push(`| ${getModuleEmoji(mod)} **${mod.replace(/\|/g, '\\|')}** | ${tasks.length} | ${mHrs.toFixed(2)} hrs |`);
-        });
-      }
     }
 
     return lines.join('\n');
@@ -427,7 +483,6 @@ export function ReleaseNotesModal({
     includeMeetings,
     boldTitles,
     includeReferences,
-    includeSummary,
     includeModuleEmojis,
     periodDetails,
     isManualEdited,
@@ -546,7 +601,7 @@ export function ReleaseNotesModal({
 
   const selectShippingAndAdmin = () => {
     const target = ['Administration', 'General Ledger', 'Shipping'].filter(m => allAvailableModules.includes(m));
-    setSelectedModules(target.length > 0 ? target : ['Administration', 'Shipping']);
+    setSelectedModules(target.length > 0 ? target : ['Administration', 'General Ledger', 'Shipping']);
     setIsManualEdited(false);
   };
 
@@ -847,6 +902,23 @@ export function ReleaseNotesModal({
           {/* Formatting Options Bar */}
           <div className="release-options-grid">
             <div className="option-field">
+              <label>Release Version:</label>
+              <div className="tag-input-wrapper">
+                <Tag size={13} />
+                <input
+                  type="text"
+                  placeholder="v1.0.11"
+                  value={releaseTag}
+                  onChange={e => {
+                    setReleaseTag(e.target.value);
+                    setIsTagCustom(true);
+                    setIsManualEdited(false);
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="option-field">
               <label>Layout Style:</label>
               <select
                 value={formatStyle}
@@ -855,10 +927,10 @@ export function ReleaseNotesModal({
                   setIsManualEdited(false);
                 }}
               >
-                <option value="clean-bullets">✨ Clean Feature Bullets (### Module)</option>
+                <option value="subfeature-grouped">📑 Sections & Sub-features (## Module / ### Screen)</option>
+                <option value="clean-bullets">✨ Clean Bullets (* **Title**: Description)</option>
                 <option value="clean-plain">📄 Plain Text Format (Module on top, no bullets)</option>
                 <option value="github-changelog">🚀 GitHub Official What's Changed</option>
-                <option value="detailed-table">📊 Detailed with Summary Table</option>
               </select>
             </div>
 
@@ -893,18 +965,6 @@ export function ReleaseNotesModal({
                 </span>
               </label>
 
-              <label className="checkbox-label" title="Bold the Feature Title before colon (**Title**:)">
-                <input
-                  type="checkbox"
-                  checked={boldTitles}
-                  onChange={e => {
-                    setBoldTitles(e.target.checked);
-                    setIsManualEdited(false);
-                  }}
-                />
-                <span>Bold Titles</span>
-              </label>
-
               <label className="checkbox-label" title="Show #Issue / Ticket reference">
                 <input
                   type="checkbox"
@@ -917,6 +977,18 @@ export function ReleaseNotesModal({
                 <span>Ticket (#)</span>
               </label>
 
+              <label className="checkbox-label" title="Bold Feature Titles in bullet format">
+                <input
+                  type="checkbox"
+                  checked={boldTitles}
+                  onChange={e => {
+                    setBoldTitles(e.target.checked);
+                    setIsManualEdited(false);
+                  }}
+                />
+                <span>Bold Titles</span>
+              </label>
+
               <label className="checkbox-label" title="Show emoji beside module names">
                 <input
                   type="checkbox"
@@ -927,18 +999,6 @@ export function ReleaseNotesModal({
                   }}
                 />
                 <span>Emojis</span>
-              </label>
-
-              <label className="checkbox-label" title="Show top release title & banner">
-                <input
-                  type="checkbox"
-                  checked={includeSummary}
-                  onChange={e => {
-                    setIncludeSummary(e.target.checked);
-                    setIsManualEdited(false);
-                  }}
-                />
-                <span>Title Banner</span>
               </label>
             </div>
           </div>
@@ -1060,11 +1120,14 @@ export function ReleaseNotesModal({
           {/* Editor Helper Toolbar (visible in Edit or Split mode) */}
           {(activeTab === 'edit' || activeTab === 'split') && (
             <div className="markdown-helper-bar">
-              <button type="button" onClick={() => insertFormatting('### ')} title="Add Module Heading (###)">
-                ### Module
+              <button type="button" onClick={() => insertFormatting('## ')} title="Add Module Heading (##)">
+                ## Module
               </button>
-              <button type="button" onClick={() => insertFormatting('* ')} title="Add bullet item">
-                * Bullet
+              <button type="button" onClick={() => insertFormatting('### ')} title="Add Sub-screen Heading (###)">
+                ### Screen
+              </button>
+              <button type="button" onClick={() => insertFormatting('- ')} title="Add dash bullet item">
+                - Bullet
               </button>
               <button type="button" onClick={() => insertFormatting('**', '**')} title="Bold title">
                 <strong>B</strong>
@@ -1075,11 +1138,8 @@ export function ReleaseNotesModal({
               <button type="button" onClick={() => insertFormatting('#')} title="Add ticket/issue reference">
                 #Ref
               </button>
-              <button type="button" onClick={() => insertFormatting('> ')} title="Add blockquote">
-                &ldquo; Quote
-              </button>
-              <button type="button" onClick={() => insertFormatting('\n\n')} title="Add new paragraph">
-                &para; Space
+              <button type="button" onClick={() => insertFormatting('\n\n')} title="Add blank line">
+                &para; Blank Line
               </button>
             </div>
           )}
