@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  GitPullRequest, Tag, CalendarDays, ChevronLeft, ChevronRight,
+  GitPullRequest, CalendarDays, ChevronLeft, ChevronRight,
   Copy, Check, Download, X, RefreshCw, Eye, Edit3, Columns,
-  CheckSquare, Sparkles, Clock3, Package,
-  Code, CheckCircle2, ChevronDown, ListFilter, AlertCircle
+  Sparkles, Clock3, Package,
+  Code, CheckCircle2, ChevronDown, ListFilter, AlertCircle,
+  Users
 } from 'lucide-react';
 import type { WorkEntry } from './App';
 import { formatSheetDate, prettyDate, monthLabel, todayISO } from './App';
 
 export type ReleaseTimeframe = 'day' | 'week' | 'month' | 'custom' | 'all';
-export type ReleaseFormatStyle = 'by-module' | 'github-changelog' | 'by-work-type';
+export type ReleaseFormatStyle = 'clean-bullets' | 'clean-plain' | 'github-changelog' | 'detailed-table';
 
 export interface ReleaseNotesModalProps {
   isOpen: boolean;
@@ -23,9 +24,9 @@ export interface ReleaseNotesModalProps {
 export const MODULE_EMOJIS: Record<string, string> = {
   'Administration': '⚙️',
   'Shipping': '📦',
+  'General Ledger': '📊',
   'Inventory': '🏬',
   'HR/Payroll': '👥',
-  'General Ledger': '📊',
   'Fixed Assets': '🏢',
   'Training Management': '🎓',
   'Vendor & Account Payable': '💳',
@@ -86,6 +87,12 @@ export const getWeekRange = (dateStr: string) => {
   };
 };
 
+export const isMeetingTask = (task: WorkEntry) => {
+  if (task.type === 'Meeting / Discussion') return true;
+  const act = (task.activity || '').toLowerCase();
+  return /\b(meeting|discussion|standup|sync|call|catchup|sync-up|daily sync)\b/i.test(act);
+};
+
 export function ReleaseNotesModal({
   isOpen,
   onClose,
@@ -134,22 +141,24 @@ export function ReleaseNotesModal({
     });
   }, [allAvailableModules]);
 
-  // Formatting options
-  const [formatStyle, setFormatStyle] = useState<ReleaseFormatStyle>('by-module');
+  // Formatting options - defaults specifically tuned to user's preferred format:
+  // Clean module format, no meetings, no hours, bold feature titles
+  const [formatStyle, setFormatStyle] = useState<ReleaseFormatStyle>('clean-bullets');
   const [releaseTag, setReleaseTag] = useState('');
   const [isTagCustom, setIsTagCustom] = useState(false);
-  const [includeHours, setIncludeHours] = useState(true);
-  const [includeReferences, setIncludeReferences] = useState(true);
-  const [includeRemarks, setIncludeRemarks] = useState(true);
-  const [includeSummary, setIncludeSummary] = useState(true);
-  const [includeWorkType, setIncludeWorkType] = useState(true);
+  const [includeMeetings, setIncludeMeetings] = useState(false); // DO NOT INCLUDE MEETINGS BY DEFAULT
+  const [includeHours, setIncludeHours] = useState(false);       // HOURS NOT NEEDED BY DEFAULT
+  const [boldTitles, setBoldTitles] = useState(true);           // Feature Title: Description
+  const [includeReferences, setIncludeReferences] = useState(false);
+  const [includeSummary, setIncludeSummary] = useState(false);
+  const [includeModuleEmojis, setIncludeModuleEmojis] = useState(false);
 
   // Excluded tasks (for task selection checklist)
   const [excludedTaskIds, setExcludedTaskIds] = useState<Set<string>>(new Set());
   const [showTaskDrawer, setShowTaskDrawer] = useState(false);
 
   // View & Edit state
-  const [activeTab, setActiveTab] = useState<'edit' | 'preview' | 'split'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'edit' | 'split'>('preview');
   const [markdown, setMarkdown] = useState('');
   const [isManualEdited, setIsManualEdited] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -214,12 +223,16 @@ export function ReleaseNotesModal({
   }, [periodDetails.defaultTag, isTagCustom]);
 
   // Filter ONLY COMPLETED tasks that match timeframe and selected modules
+  // AND exclude meetings unless user opted in
   const candidateTasks = useMemo(() => {
     return entries.filter(e => {
       // 1. MUST be Completed
       if (e.workDone !== 'A Completed') return false;
 
-      // 2. Timeframe match
+      // 2. Exclude meetings if disabled
+      if (!includeMeetings && isMeetingTask(e)) return false;
+
+      // 3. Timeframe match
       if (timeframe === 'day' && e.date !== selectedDay) return false;
       if (timeframe === 'week' && (e.date < weekInfo.start || e.date > weekInfo.end)) return false;
       if (timeframe === 'month' && !e.date.startsWith(selectedMonth)) return false;
@@ -228,7 +241,7 @@ export function ReleaseNotesModal({
         if (customEndDate && e.date > customEndDate) return false;
       }
 
-      // 3. Module match
+      // 4. Module match
       const taskMod = (e.module || '').trim();
       const matchMod = taskMod || 'General / Unassigned';
       if (selectedModules.length > 0 && !selectedModules.includes(matchMod) && !selectedModules.includes(taskMod)) {
@@ -237,162 +250,165 @@ export function ReleaseNotesModal({
 
       return true;
     });
-  }, [entries, timeframe, selectedDay, weekInfo, selectedMonth, customStartDate, customEndDate, selectedModules]);
+  }, [entries, timeframe, selectedDay, weekInfo, selectedMonth, customStartDate, customEndDate, selectedModules, includeMeetings]);
 
   // Active tasks (excluding user-deselected tasks)
   const activeTasks = useMemo(() => {
     return candidateTasks.filter(t => !excludedTaskIds.has(t.id));
   }, [candidateTasks, excludedTaskIds]);
 
-  // Generate GitHub Markdown
+  // Format a single work task into "Feature Title: Description"
+  const formatTaskLine = (
+    task: WorkEntry,
+    style: 'bullets' | 'plain',
+    boldTitle: boolean,
+    showRef: boolean,
+    showHours: boolean
+  ) => {
+    const act = (task.activity || '').trim();
+    const remarks = (task.appRemarks || '').trim();
+
+    let title = '';
+    let desc = '';
+
+    if (act.includes(':')) {
+      const colonIdx = act.indexOf(':');
+      title = act.slice(0, colonIdx).trim();
+      desc = act.slice(colonIdx + 1).trim();
+    } else if (remarks) {
+      title = act;
+      desc = remarks;
+    } else {
+      title = act;
+    }
+
+    const refSuffix = showRef && task.reference ? ` (#${task.reference.replace(/^#/, '')})` : '';
+    const hourSuffix = showHours && task.hours ? ` (${Number(task.hours).toFixed(2)} hrs)` : '';
+
+    let formattedContent = '';
+    if (desc) {
+      if (boldTitle) {
+        formattedContent = `**${title}**: ${desc}${refSuffix}${hourSuffix}`;
+      } else {
+        formattedContent = `${title}: ${desc}${refSuffix}${hourSuffix}`;
+      }
+    } else {
+      if (boldTitle) {
+        formattedContent = `**${title}**${refSuffix}${hourSuffix}`;
+      } else {
+        formattedContent = `${title}${refSuffix}${hourSuffix}`;
+      }
+    }
+
+    return style === 'bullets' ? `* ${formattedContent}` : formattedContent;
+  };
+
+  // Generate Release Notes Markdown / Text
   const generateMarkdown = () => {
-    const title = releaseTag ? `${periodDetails.defaultTitle} (${releaseTag})` : periodDetails.defaultTitle;
     const totalCount = activeTasks.length;
-    const totalHours = activeTasks.reduce((sum, t) => sum + (Number(t.hours) || 0), 0);
 
     // Group tasks by module
     const tasksByModule: Record<string, WorkEntry[]> = {};
     activeTasks.forEach(task => {
-      const mod = task.module?.trim() || 'General / Administration';
+      const mod = task.module?.trim() || 'Administration';
       if (!tasksByModule[mod]) tasksByModule[mod] = [];
       tasksByModule[mod].push(task);
     });
 
     const moduleKeys = Object.keys(tasksByModule).sort((a, b) => {
-      // Prioritize Shipping and Administration first if present
-      if (a === 'Shipping') return -1;
-      if (b === 'Shipping') return 1;
+      // Prioritize Administration, Shipping, General Ledger first
       if (a === 'Administration') return -1;
       if (b === 'Administration') return 1;
+      if (a === 'Shipping') return -1;
+      if (b === 'Shipping') return 1;
+      if (a === 'General Ledger') return -1;
+      if (b === 'General Ledger') return 1;
       return a.localeCompare(b);
     });
 
     if (totalCount === 0) {
-      return `# 🚀 ${title}\n\n> **Release Period**: ${periodDetails.label}\n\n*No completed tasks found for the selected period and modules.*`;
+      return `*No completed deliverables found for the selected period and modules.*`;
     }
 
     const lines: string[] = [];
 
-    // Header
-    lines.push(`# 🚀 ${title}`);
-    lines.push('');
-
-    // Summary blockquote
-    lines.push(`> **Release Period**: ${periodDetails.label}  `);
-    lines.push(`> **Completed Deliverables**: **${totalCount}** tasks across **${moduleKeys.length}** modules${includeHours ? ` · **${totalHours.toFixed(2)} hrs** logged` : ''}`);
-    lines.push('');
-
-    // Overview section
+    // Optional Top Header & Summary Banner
     if (includeSummary) {
-      lines.push('## 📋 Release Highlights');
-      const modulePills = moduleKeys.map(m => `${getModuleEmoji(m)} **${m}** (${tasksByModule[m].length})`).join(' · ');
-      lines.push(`- **Modules Updated**: ${modulePills}`);
-
-      // Count by work type
-      const typeCounts: Record<string, number> = {};
-      activeTasks.forEach(t => {
-        const typeName = t.type || 'Deliverable';
-        typeCounts[typeName] = (typeCounts[typeName] || 0) + 1;
-      });
-      const typePills = Object.entries(typeCounts)
-        .map(([type, count]) => `${type}: ${count}`)
-        .join(', ');
-      if (typePills) {
-        lines.push(`- **Work Categories**: ${typePills}`);
-      }
+      const title = releaseTag ? `${periodDetails.defaultTitle} (${releaseTag})` : periodDetails.defaultTitle;
+      lines.push(`# 🚀 ${title}`);
+      lines.push('');
+      lines.push(`> **Release Period**: ${periodDetails.label}  `);
+      lines.push(`> **Completed Deliverables**: **${totalCount}** tasks across **${moduleKeys.length}** modules${includeHours ? ` · **${activeTasks.reduce((s, t) => s + (Number(t.hours) || 0), 0).toFixed(2)} hrs** logged` : ''}`);
       lines.push('');
       lines.push('---');
       lines.push('');
     }
 
-    if (formatStyle === 'github-changelog') {
+    if (formatStyle === 'clean-plain') {
+      // EXACT FORMAT AS REQUESTED:
+      // Module Name
+      // Feature Title: Description
+      moduleKeys.forEach((mod, idx) => {
+        if (idx > 0) lines.push('');
+        const modHeader = includeModuleEmojis ? `${getModuleEmoji(mod)} ${mod}` : mod;
+        lines.push(modHeader);
+        tasksByModule[mod].forEach(task => {
+          lines.push(formatTaskLine(task, 'plain', boldTitles, includeReferences, includeHours));
+        });
+      });
+    } else if (formatStyle === 'clean-bullets') {
+      // CLEAN GITHUB MARKDOWN FORMAT:
+      // ### Module Name
+      // * **Feature Title**: Description
+      moduleKeys.forEach((mod, idx) => {
+        if (idx > 0) lines.push('');
+        const modHeader = includeModuleEmojis ? `### ${getModuleEmoji(mod)} ${mod}` : `### ${mod}`;
+        lines.push(modHeader);
+        tasksByModule[mod].forEach(task => {
+          lines.push(formatTaskLine(task, 'bullets', boldTitles, includeReferences, includeHours));
+        });
+      });
+    } else if (formatStyle === 'github-changelog') {
       // Official GitHub "What's Changed" format
       lines.push("## 🚀 What's Changed");
       lines.push('');
       moduleKeys.forEach(mod => {
-        lines.push(`### ${getModuleEmoji(mod)} ${mod}`);
+        const modHeader = includeModuleEmojis ? `### ${getModuleEmoji(mod)} ${mod}` : `### ${mod}`;
+        lines.push(modHeader);
         tasksByModule[mod].forEach(task => {
           const refStr = task.reference ? ` in #${task.reference.replace(/^#/, '')}` : '';
-          const typeStr = includeWorkType && task.type ? ` [${task.type}]` : '';
           const hourStr = includeHours && task.hours ? ` (${Number(task.hours).toFixed(2)}h)` : '';
-          lines.push(`* ${task.activity}${typeStr}${refStr}${hourStr}`);
+          lines.push(`* ${task.activity}${refStr}${hourStr}`);
         });
         lines.push('');
       });
       lines.push('**Full Changelog**: https://github.com/org/repo/commits/' + (releaseTag || 'main'));
-    } else if (formatStyle === 'by-work-type') {
-      // Group by Work Type (Development, Bug Fixing, etc.)
-      const byType: Record<string, WorkEntry[]> = {};
-      activeTasks.forEach(t => {
-        const typeName = t.type || 'General Work';
-        if (!byType[typeName]) byType[typeName] = [];
-        byType[typeName].push(t);
-      });
-
-      Object.keys(byType).sort().forEach(type => {
-        const icon = type.includes('Bug') ? '🐛' : type.includes('Dev') ? '✨' : type.includes('Test') ? '🧪' : '📌';
-        lines.push(`## ${icon} ${type}`);
-        lines.push('');
-        byType[type].forEach(task => {
-          const modStr = task.module ? `\`${getModuleEmoji(task.module)} ${task.module}\`` : '';
-          const refStr = includeReferences && task.reference ? ` (#${task.reference.replace(/^#/, '')})` : '';
-          const hoursStr = includeHours && task.hours ? ` · *${Number(task.hours).toFixed(2)} hrs*` : '';
-          const dateStr = formatSheetDate(task.date);
-
-          lines.push(`* ${modStr} **${task.activity}**${refStr}${hoursStr} — \`${dateStr}\``);
-          if (includeRemarks && task.appRemarks) {
-            lines.push(`  > ${task.appRemarks.replace(/\n/g, '\n  > ')}`);
-          }
-        });
-        lines.push('');
-      });
     } else {
-      // Default: Categorized by Module (Shipping, Administration, etc.)
+      // Detailed Table format
+      const title = releaseTag ? `${periodDetails.defaultTitle} (${releaseTag})` : periodDetails.defaultTitle;
+      lines.push(`# 🚀 ${title}`);
+      lines.push('');
       moduleKeys.forEach(mod => {
         lines.push(`## ${getModuleEmoji(mod)} ${mod}`);
         lines.push('');
         tasksByModule[mod].forEach(task => {
-          const refStr = includeReferences && task.reference ? ` (#${task.reference.replace(/^#/, '')})` : '';
-          const typeBadge = includeWorkType && task.type ? ` \`[${task.type}]\`` : '';
-          const hoursStr = includeHours && task.hours ? ` · *${Number(task.hours).toFixed(2)} hrs*` : '';
-          const dateStr = formatSheetDate(task.date);
-
-          lines.push(`* **${task.activity}**${refStr}${typeBadge}${hoursStr} — \`${dateStr}\``);
-          if (includeRemarks && task.appRemarks) {
-            lines.push(`  > ${task.appRemarks.replace(/\n/g, '\n  > ')}`);
-          }
+          lines.push(formatTaskLine(task, 'bullets', true, includeReferences, includeHours));
         });
         lines.push('');
       });
 
-      // Module breakdown table
-      if (includeSummary && moduleKeys.length > 0) {
+      if (includeHours) {
         lines.push('---');
-        lines.push('');
         lines.push('### 📊 Module Summary Table');
-        lines.push('');
-        if (includeHours) {
-          lines.push('| Module | Deliverables | Time Spent |');
-          lines.push('| :--- | :---: | :---: |');
-          moduleKeys.forEach(mod => {
-            const tasks = tasksByModule[mod];
-            const mHrs = tasks.reduce((sum, t) => sum + (Number(t.hours) || 0), 0);
-            lines.push(`| ${getModuleEmoji(mod)} **${mod.replace(/\|/g, '\\|')}** | ${tasks.length} | ${mHrs.toFixed(2)} hrs |`);
-          });
-        } else {
-          lines.push('| Module | Deliverables |');
-          lines.push('| :--- | :---: |');
-          moduleKeys.forEach(mod => {
-            const tasks = tasksByModule[mod];
-            lines.push(`| ${getModuleEmoji(mod)} **${mod.replace(/\|/g, '\\|')}** | ${tasks.length} |`);
-          });
-        }
-        lines.push('');
+        lines.push('| Module | Deliverables | Time Spent |');
+        lines.push('| :--- | :---: | :---: |');
+        moduleKeys.forEach(mod => {
+          const tasks = tasksByModule[mod];
+          const mHrs = tasks.reduce((sum, t) => sum + (Number(t.hours) || 0), 0);
+          lines.push(`| ${getModuleEmoji(mod)} **${mod.replace(/\|/g, '\\|')}** | ${tasks.length} | ${mHrs.toFixed(2)} hrs |`);
+        });
       }
     }
-
-    lines.push('---');
-    lines.push(`<sub>Generated automatically with Personal Work Tracker · ${formatSheetDate(todayISO())}</sub>`);
 
     return lines.join('\n');
   };
@@ -408,10 +424,11 @@ export function ReleaseNotesModal({
     formatStyle,
     releaseTag,
     includeHours,
+    includeMeetings,
+    boldTitles,
     includeReferences,
-    includeRemarks,
     includeSummary,
-    includeWorkType,
+    includeModuleEmojis,
     periodDetails,
     isManualEdited,
   ]);
@@ -486,7 +503,7 @@ export function ReleaseNotesModal({
 
     if (success) {
       setCopied(true);
-      setNotice('GitHub release notes copied to clipboard!');
+      setNotice('Release notes copied to clipboard!');
       setTimeout(() => setCopied(false), 2000);
     } else {
       setNotice('Could not copy to clipboard. Please copy directly from the editor.');
@@ -528,8 +545,8 @@ export function ReleaseNotesModal({
   };
 
   const selectShippingAndAdmin = () => {
-    const target = ['Shipping', 'Administration'].filter(m => allAvailableModules.includes(m));
-    setSelectedModules(target.length > 0 ? target : ['Shipping', 'Administration']);
+    const target = ['Administration', 'General Ledger', 'Shipping'].filter(m => allAvailableModules.includes(m));
+    setSelectedModules(target.length > 0 ? target : ['Administration', 'Shipping']);
     setIsManualEdited(false);
   };
 
@@ -571,7 +588,7 @@ export function ReleaseNotesModal({
             <div>
               <h2 id="release-modal-title">GitHub Release Notes Generator</h2>
               <p>
-                Formats completed deliverables under <strong>Shipping</strong>, <strong>Administration</strong>, and other main modules into GitHub Releases markdown.
+                Formats completed deliverables under <strong>Administration</strong>, <strong>General Ledger</strong>, <strong>Shipping</strong>, etc. into your clean release format.
               </p>
             </div>
           </div>
@@ -771,7 +788,7 @@ export function ReleaseNotesModal({
               {timeframe === 'all' && (
                 <span className="all-time-tag">
                   <Sparkles size={13} />
-                  <span>Scanning all completed records in tracker</span>
+                  <span>All completed records in tracker</span>
                 </span>
               )}
             </div>
@@ -795,16 +812,16 @@ export function ReleaseNotesModal({
                 <button
                   type="button"
                   className={`preset-btn ${
-                    selectedModules.length === 2 &&
-                    selectedModules.includes('Shipping') &&
-                    selectedModules.includes('Administration')
+                    selectedModules.length >= 2 &&
+                    selectedModules.includes('Administration') &&
+                    selectedModules.includes('General Ledger')
                       ? 'active'
                       : ''
                   }`}
                   onClick={selectShippingAndAdmin}
-                  title="Only include Shipping and Administration modules"
+                  title="Only include Administration, General Ledger, Shipping"
                 >
-                  📦 Shipping & ⚙️ Administration
+                  ⚙️ Admin, GL & 📦 Shipping
                 </button>
               </div>
             </div>
@@ -830,23 +847,6 @@ export function ReleaseNotesModal({
           {/* Formatting Options Bar */}
           <div className="release-options-grid">
             <div className="option-field">
-              <label>Release Title / Tag:</label>
-              <div className="tag-input-wrapper">
-                <Tag size={13} />
-                <input
-                  type="text"
-                  placeholder="e.g. v1.2.0 or Release - Week 46"
-                  value={releaseTag}
-                  onChange={e => {
-                    setReleaseTag(e.target.value);
-                    setIsTagCustom(true);
-                    setIsManualEdited(false);
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="option-field">
               <label>Layout Style:</label>
               <select
                 value={formatStyle}
@@ -855,14 +855,30 @@ export function ReleaseNotesModal({
                   setIsManualEdited(false);
                 }}
               >
-                <option value="by-module">📦 Categorized by Module (Recommended)</option>
+                <option value="clean-bullets">✨ Clean Feature Bullets (### Module)</option>
+                <option value="clean-plain">📄 Plain Text Format (Module on top, no bullets)</option>
                 <option value="github-changelog">🚀 GitHub Official What's Changed</option>
-                <option value="by-work-type">✨ Changelog by Work Type (Dev / Bug Fixing)</option>
+                <option value="detailed-table">📊 Detailed with Summary Table</option>
               </select>
             </div>
 
             <div className="option-checkboxes">
-              <label className="checkbox-label" title="Show logged hours">
+              <label className="checkbox-label" title="Do not include meetings or discussions">
+                <input
+                  type="checkbox"
+                  checked={includeMeetings}
+                  onChange={e => {
+                    setIncludeMeetings(e.target.checked);
+                    setIsManualEdited(false);
+                  }}
+                />
+                <span style={{ color: !includeMeetings ? '#0f766e' : '#475569', fontWeight: !includeMeetings ? 700 : 500 }}>
+                  <Users size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} />
+                  {includeMeetings ? 'Include Meetings' : 'Exclude Meetings'}
+                </span>
+              </label>
+
+              <label className="checkbox-label" title="Include logged hours in release notes">
                 <input
                   type="checkbox"
                   checked={includeHours}
@@ -871,8 +887,24 @@ export function ReleaseNotesModal({
                     setIsManualEdited(false);
                   }}
                 />
-                <span>Hours</span>
+                <span style={{ color: includeHours ? '#0f766e' : '#64748b' }}>
+                  <Clock3 size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} />
+                  Hours ({includeHours ? 'Shown' : 'Hidden'})
+                </span>
               </label>
+
+              <label className="checkbox-label" title="Bold the Feature Title before colon (**Title**:)">
+                <input
+                  type="checkbox"
+                  checked={boldTitles}
+                  onChange={e => {
+                    setBoldTitles(e.target.checked);
+                    setIsManualEdited(false);
+                  }}
+                />
+                <span>Bold Titles</span>
+              </label>
+
               <label className="checkbox-label" title="Show #Issue / Ticket reference">
                 <input
                   type="checkbox"
@@ -882,31 +914,22 @@ export function ReleaseNotesModal({
                     setIsManualEdited(false);
                   }}
                 />
-                <span>References (#)</span>
+                <span>Ticket (#)</span>
               </label>
-              <label className="checkbox-label" title="Show Development, Bug Fixing badges">
+
+              <label className="checkbox-label" title="Show emoji beside module names">
                 <input
                   type="checkbox"
-                  checked={includeWorkType}
+                  checked={includeModuleEmojis}
                   onChange={e => {
-                    setIncludeWorkType(e.target.checked);
+                    setIncludeModuleEmojis(e.target.checked);
                     setIsManualEdited(false);
                   }}
                 />
-                <span>Work Type</span>
+                <span>Emojis</span>
               </label>
-              <label className="checkbox-label" title="Show remarks and details blockquote">
-                <input
-                  type="checkbox"
-                  checked={includeRemarks}
-                  onChange={e => {
-                    setIncludeRemarks(e.target.checked);
-                    setIsManualEdited(false);
-                  }}
-                />
-                <span>Remarks</span>
-              </label>
-              <label className="checkbox-label" title="Show summary overview & table">
+
+              <label className="checkbox-label" title="Show top release title & banner">
                 <input
                   type="checkbox"
                   checked={includeSummary}
@@ -915,7 +938,7 @@ export function ReleaseNotesModal({
                     setIsManualEdited(false);
                   }}
                 />
-                <span>Summary Box</span>
+                <span>Title Banner</span>
               </label>
             </div>
           </div>
@@ -932,7 +955,7 @@ export function ReleaseNotesModal({
               <ListFilter size={15} />
               <span>
                 <strong>{candidateTasks.length} Completed Tasks Detected</strong>
-                <small>({activeTasks.length} included in note · {candidateTasks.length - activeTasks.length} excluded)</small>
+                <small>({activeTasks.length} included in note · {candidateTasks.length - activeTasks.length} excluded {!includeMeetings && '· Meetings filtered out'})</small>
               </span>
             </div>
             <div className="drawer-actions">
@@ -956,7 +979,7 @@ export function ReleaseNotesModal({
               {candidateTasks.length === 0 ? (
                 <div className="empty-tasks-notice">
                   <AlertCircle size={16} />
-                  <span>No completed tasks found in this timeframe for the selected modules.</span>
+                  <span>No completed tasks found in this timeframe for the selected modules {!includeMeetings && '(Meetings are excluded)'}.</span>
                 </div>
               ) : (
                 <div className="checklist-items-scroll">
@@ -972,7 +995,7 @@ export function ReleaseNotesModal({
                         <span className="item-module-badge">{getModuleEmoji(t.module)} {t.module || 'General'}</span>
                         <span className="item-activity">{t.activity}</span>
                         {t.reference && <span className="item-ref">#{t.reference.replace(/^#/, '')}</span>}
-                        {t.hours ? <span className="item-hours">{Number(t.hours).toFixed(2)}h</span> : null}
+                        {includeHours && t.hours ? <span className="item-hours">{Number(t.hours).toFixed(2)}h</span> : null}
                         <span className="item-date">{formatSheetDate(t.date)}</span>
                       </label>
                     );
@@ -992,7 +1015,7 @@ export function ReleaseNotesModal({
               onClick={() => setActiveTab('preview')}
             >
               <Eye size={14} />
-              <span>GitHub Preview</span>
+              <span>Preview</span>
             </button>
             <button
               type="button"
@@ -1000,7 +1023,7 @@ export function ReleaseNotesModal({
               onClick={() => setActiveTab('edit')}
             >
               <Edit3 size={14} />
-              <span>Edit Markdown</span>
+              <span>Edit Text</span>
               {isManualEdited && <span className="dirty-badge">Customized</span>}
             </button>
             <button
@@ -1037,19 +1060,13 @@ export function ReleaseNotesModal({
           {/* Editor Helper Toolbar (visible in Edit or Split mode) */}
           {(activeTab === 'edit' || activeTab === 'split') && (
             <div className="markdown-helper-bar">
-              <button type="button" onClick={() => insertFormatting('## ')} title="Add Heading 2">
-                H2
-              </button>
-              <button type="button" onClick={() => insertFormatting('### ')} title="Add Heading 3">
-                H3
+              <button type="button" onClick={() => insertFormatting('### ')} title="Add Module Heading (###)">
+                ### Module
               </button>
               <button type="button" onClick={() => insertFormatting('* ')} title="Add bullet item">
-                • Bullet
+                * Bullet
               </button>
-              <button type="button" onClick={() => insertFormatting('- [x] ')} title="Add task checkbox">
-                <CheckSquare size={12} /> Task
-              </button>
-              <button type="button" onClick={() => insertFormatting('**', '**')} title="Bold text">
+              <button type="button" onClick={() => insertFormatting('**', '**')} title="Bold title">
                 <strong>B</strong>
               </button>
               <button type="button" onClick={() => insertFormatting('`', '`')} title="Inline code">
@@ -1061,8 +1078,8 @@ export function ReleaseNotesModal({
               <button type="button" onClick={() => insertFormatting('> ')} title="Add blockquote">
                 &ldquo; Quote
               </button>
-              <button type="button" onClick={() => insertFormatting('\n---\n')} title="Add horizontal divider">
-                &mdash; Divider
+              <button type="button" onClick={() => insertFormatting('\n\n')} title="Add new paragraph">
+                &para; Space
               </button>
             </div>
           )}
@@ -1077,7 +1094,7 @@ export function ReleaseNotesModal({
                   className="release-markdown-textarea"
                   value={markdown}
                   onChange={e => handleMarkdownChange(e.target.value)}
-                  placeholder="Release notes markdown content..."
+                  placeholder="Release notes content..."
                   spellCheck={false}
                 />
               </div>
@@ -1088,7 +1105,10 @@ export function ReleaseNotesModal({
               <div className="preview-pane">
                 <div className="github-preview-wrapper">
                   <div className="github-release-card">
-                    <GitHubMarkdownRenderer content={markdown} />
+                    <GitHubMarkdownRenderer
+                      content={markdown}
+                      availableModules={allAvailableModules}
+                    />
                   </div>
                 </div>
               </div>
@@ -1101,8 +1121,13 @@ export function ReleaseNotesModal({
           <div className="footer-status-info">
             <span className="task-summary-badge">
               <CheckCircle2 size={14} />
-              <strong>{activeTasks.length}</strong> deliverables included
+              <strong>{activeTasks.length}</strong> items ready
             </span>
+            {!includeMeetings && (
+              <span className="meetings-excluded-badge" title="Meeting items filtered out">
+                Meetings excluded
+              </span>
+            )}
             {includeHours && (
               <span className="hours-summary-badge">
                 <Clock3 size={14} />
@@ -1116,7 +1141,7 @@ export function ReleaseNotesModal({
               type="button"
               className="secondary-button"
               onClick={handleDownload}
-              title="Download markdown as a .md file"
+              title="Download as a .md text file"
             >
               <Download size={15} />
               <span>Download .md</span>
@@ -1125,10 +1150,10 @@ export function ReleaseNotesModal({
               type="button"
               className="primary-button copy-gh-btn"
               onClick={handleCopy}
-              title="Copy GitHub markdown to clipboard"
+              title="Copy formatted notes directly to clipboard"
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}
-              <span>{copied ? 'Copied to Clipboard!' : 'Copy for GitHub'}</span>
+              <span>{copied ? 'Copied to Clipboard!' : 'Copy Release Notes'}</span>
             </button>
             <button type="button" className="secondary-button" onClick={onClose}>
               Close
@@ -1141,12 +1166,23 @@ export function ReleaseNotesModal({
 }
 
 // Lightweight, pure React GitHub Markdown Renderer
-function GitHubMarkdownRenderer({ content }: { content: string }) {
+function GitHubMarkdownRenderer({
+  content,
+  availableModules = [],
+}: {
+  content: string;
+  availableModules?: string[];
+}) {
   const blocks = useMemo(() => {
     if (!content) return [];
     const lines = content.split(/\r?\n/);
     const parsedBlocks: React.ReactNode[] = [];
     let i = 0;
+
+    const isModuleHeading = (str: string) => {
+      const clean = str.replace(/^[#\s*•\-:]+/, '').replace(/:$/, '').trim();
+      return availableModules.includes(clean);
+    };
 
     while (i < lines.length) {
       const line = lines[i];
@@ -1203,6 +1239,17 @@ function GitHubMarkdownRenderer({ content }: { content: string }) {
       }
       if (line.startsWith('#### ')) {
         parsedBlocks.push(<h4 key={`h4-${i}`} className="gh-h4">{renderInlineMarkdown(line.slice(5))}</h4>);
+        i++;
+        continue;
+      }
+
+      // Standalone Module Name (when using plain text style e.g. "Administration", "General Ledger")
+      if (isModuleHeading(line.trim())) {
+        parsedBlocks.push(
+          <h3 key={`mod-plain-${i}`} className="gh-h3 gh-plain-module-heading">
+            {renderInlineMarkdown(line.trim())}
+          </h3>
+        );
         i++;
         continue;
       }
@@ -1334,6 +1381,21 @@ function GitHubMarkdownRenderer({ content }: { content: string }) {
         continue;
       }
 
+      // Feature Line: "Title: Description" in Plain Mode
+      if (line.includes(': ')) {
+        const colonIdx = line.indexOf(': ');
+        const t = line.slice(0, colonIdx);
+        const d = line.slice(colonIdx + 2);
+        parsedBlocks.push(
+          <p key={`p-feat-${i}`} className="gh-p gh-plain-feature-line">
+            <strong className="gh-plain-title">{renderInlineMarkdown(t)}: </strong>
+            <span>{renderInlineMarkdown(d)}</span>
+          </p>
+        );
+        i++;
+        continue;
+      }
+
       // Regular Paragraph
       parsedBlocks.push(
         <p key={`p-${i}`} className="gh-p">
@@ -1344,7 +1406,7 @@ function GitHubMarkdownRenderer({ content }: { content: string }) {
     }
 
     return parsedBlocks;
-  }, [content]);
+  }, [content, availableModules]);
 
   return <div className="gh-markdown-body">{blocks}</div>;
 }

@@ -433,7 +433,19 @@ const formatEntriesForSheet = (
     .join('\r\n');
 
   const htmlRows = allRows
-    .map(row => `<tr>${row.map(cell => `<td style="text-align: left;" align="left">${escapeHTML(String(cell))}</td>`).join('')}</tr>`)
+    .map((row, rowIdx) => {
+      const isHeaderRow = includeHeaders && rowIdx === 0;
+      const cells = row
+        .map((cell, colIndex) => {
+          // Column index 6 is "Time Spent (hrs)" -> right aligned
+          const isHourCol = colIndex === 6;
+          const align = isHourCol ? 'right' : 'left';
+          const tag = isHeaderRow ? 'th' : 'td';
+          return `<${tag} style="text-align: ${align};" align="${align}">${escapeHTML(String(cell))}</${tag}>`;
+        })
+        .join('');
+      return `<tr>${cells}</tr>`;
+    })
     .join('');
   const htmlTable = `<table><tbody>${htmlRows}</tbody></table>`;
 
