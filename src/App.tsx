@@ -8,9 +8,10 @@ import {
   ArrowUp, ArrowDown, GripVertical, ArrowRightCircle, ListPlus, List,
   Cloud, CloudUpload, Lock, Unlock, CheckSquare, Square,
   MoreHorizontal, ChevronDown, Columns, Layers, RotateCcw,
-  Minus, GitPullRequest
+  GitPullRequest
 } from 'lucide-react';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
+import { StickyNotepad } from './StickyNotepad';
 
 export type WorkOutcome =
   | ''
@@ -33,7 +34,8 @@ export type WorkType =
   | 'Investigation'
   | 'Meeting / Discussion'
   | 'Testing'
-  | 'Training';
+  | 'Training'
+  | 'UI/UX Improvement';
 
 export type WorkEntry = {
   id: string;
@@ -68,7 +70,6 @@ const GROUP_BY_CATEGORY_KEY = 'my-work-log.group-by-category.v1';
 const VISIBLE_COLUMNS_KEY = 'my-work-log.visible-columns.v1';
 const LEFT_ALIGN_NO_DATE_KEY = 'my-work-log.left-align-no-date.v1';
 const STICKY_NOTES_KEY = 'my-work-log.sticky-notes.v2';
-const STICKY_POS_KEY = 'my-work-log.sticky-pos.v1';
 const STICKY_MINIMIZED_KEY = 'my-work-log.sticky-minimized.v1';
 const STICKY_OPEN_KEY = 'my-work-log.sticky-open.v1';
 const LOCKED_DAYS_KEY = 'my-work-log.locked-days.v1';
@@ -79,8 +80,12 @@ export type StickyColor = 'yellow' | 'green' | 'blue' | 'pink' | 'purple' | 'dar
 
 export interface StickyNoteItem {
   id: string;
+  title?: string;
   content: string;
   color: StickyColor;
+  isPinned?: boolean;
+  linkedDate?: string;
+  isMono?: boolean;
   updatedAt: string;
 }
 
@@ -190,6 +195,7 @@ export const workTypes: WorkType[] = [
   'Meeting / Discussion',
   'Testing',
   'Training',
+  'UI/UX Improvement',
 ];
 
 export const todayISO = () => {
@@ -347,13 +353,34 @@ const loadModules = (): string[] => {
   }
 };
 
+const VALID_STICKY_COLORS: StickyColor[] = ['yellow', 'green', 'blue', 'pink', 'purple', 'dark'];
+
+const normalizeStickyNote = (raw: any, fallbackIdx = 0): StickyNoteItem => {
+  const item = raw && typeof raw === 'object' ? raw : {};
+  const color: StickyColor = VALID_STICKY_COLORS.includes(item.color) ? item.color : 'yellow';
+  const linkedDate =
+    typeof item.linkedDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.linkedDate)
+      ? item.linkedDate
+      : undefined;
+  return {
+    id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `note-${Date.now()}-${fallbackIdx}`,
+    title: typeof item.title === 'string' ? item.title : '',
+    content: typeof item.content === 'string' ? item.content : '',
+    color,
+    isPinned: Boolean(item.isPinned),
+    linkedDate,
+    isMono: Boolean(item.isMono),
+    updatedAt: typeof item.updatedAt === 'string' && item.updatedAt ? item.updatedAt : new Date().toISOString(),
+  };
+};
+
 const loadStickyNotes = (): StickyNoteItem[] => {
   try {
     const raw = localStorage.getItem(STICKY_NOTES_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.map((item, idx) => normalizeStickyNote(item, idx));
       }
     }
     // Migration from v1 if present
@@ -364,8 +391,10 @@ const loadStickyNotes = (): StickyNoteItem[] => {
       if (v1.general && v1.general.trim()) {
         items.push({
           id: 'note-general',
+          title: 'General Notes',
           content: v1.general,
           color: 'yellow',
+          isPinned: true,
           updatedAt: new Date().toISOString(),
         });
       }
@@ -374,8 +403,10 @@ const loadStickyNotes = (): StickyNoteItem[] => {
           if (typeof text === 'string' && text.trim()) {
             items.push({
               id: `note-${d}`,
+              title: /^\d{4}-\d{2}-\d{2}$/.test(d) ? `Notes · ${formatSheetDate(d)}` : '',
               content: text,
               color: 'yellow',
+              linkedDate: /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : undefined,
               updatedAt: new Date().toISOString(),
             });
           }
@@ -389,8 +420,10 @@ const loadStickyNotes = (): StickyNoteItem[] => {
   return [
     {
       id: 'note-1',
-      content: '• Meeting notes & quick links\n• Ticket # to review\n• Micro to-dos with - [ ]',
+      title: 'Quick Scratchpad',
+      content: '• Meeting notes & quick links\n• Ticket # to review\n- [ ] Micro to-dos (click checkbox anytime, press Enter for next)',
       color: 'yellow',
+      isPinned: false,
       updatedAt: new Date().toISOString(),
     },
   ];
@@ -561,6 +594,7 @@ const getTypeClass = (type: WorkType) => {
     case 'Meeting / Discussion': return 'type-meeting';
     case 'Testing': return 'type-testing';
     case 'Training': return 'type-training';
+    case 'UI/UX Improvement': return 'type-uiux';
     default: return 'type-empty';
   }
 };
@@ -776,36 +810,6 @@ function App() {
   };
 
   const [stickyNotes, setStickyNotes] = useState<StickyNoteItem[]>(loadStickyNotes);
-  const [activeNoteIndex, setActiveNoteIndex] = useState<number>(0);
-
-  // Guard activeNoteIndex if notes are deleted or loaded dynamically
-  useEffect(() => {
-    if (activeNoteIndex >= stickyNotes.length) {
-      setActiveNoteIndex(Math.max(0, stickyNotes.length - 1));
-    }
-  }, [stickyNotes.length, activeNoteIndex]);
-
-  // Keep sticky note within viewport on window resize
-  useEffect(() => {
-    const handleResize = () => {
-      setStickyPos(pos => {
-        if (!pos) return pos;
-        const noteEl = document.getElementById('floating-sticky-note');
-        const width = noteEl?.offsetWidth || 320;
-        const height = noteEl?.offsetHeight || 350;
-        const maxX = Math.max(0, window.innerWidth - width - 10);
-        const maxY = Math.max(0, window.innerHeight - height - 10);
-        const clampedX = Math.min(Math.max(10, pos.x), maxX);
-        const clampedY = Math.min(Math.max(10, pos.y), maxY);
-        if (clampedX !== pos.x || clampedY !== pos.y) {
-          return { x: clampedX, y: clampedY };
-        }
-        return pos;
-      });
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
   const [showSticky, setShowSticky] = useState<boolean>(() => {
     try {
       return localStorage.getItem(STICKY_OPEN_KEY) !== 'false';
@@ -820,19 +824,6 @@ function App() {
       return false;
     }
   });
-  const [stickyPos, setStickyPos] = useState<{ x: number; y: number } | null>(() => {
-    try {
-      const saved = localStorage.getItem(STICKY_POS_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // storage
-    }
-    return null;
-  });
-  const [isDraggingSticky, setIsDraggingSticky] = useState<boolean>(false);
-  const dragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [copiedSticky, setCopiedSticky] = useState<boolean>(false);
-  const stickyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     try {
@@ -857,55 +848,6 @@ function App() {
       // Storage exception handler
     }
   }, [isStickyMinimized]);
-
-  useEffect(() => {
-    if (stickyPos) {
-      try {
-        localStorage.setItem(STICKY_POS_KEY, JSON.stringify(stickyPos));
-      } catch {
-        // Storage exception handler
-      }
-    }
-  }, [stickyPos]);
-
-  const handleStickyMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button, input, select, textarea')) return;
-    e.preventDefault();
-    const noteEl = document.getElementById('floating-sticky-note');
-    if (!noteEl) return;
-    const rect = noteEl.getBoundingClientRect();
-    dragOffsetRef.current = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
-    setIsDraggingSticky(true);
-  };
-
-  useEffect(() => {
-    if (!isDraggingSticky) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const noteEl = document.getElementById('floating-sticky-note');
-      const width = noteEl?.offsetWidth || 320;
-      const height = noteEl?.offsetHeight || 350;
-      const maxX = Math.max(0, window.innerWidth - width - 10);
-      const maxY = Math.max(0, window.innerHeight - height - 10);
-      const newX = Math.min(Math.max(10, e.clientX - dragOffsetRef.current.x), maxX);
-      const newY = Math.min(Math.max(10, e.clientY - dragOffsetRef.current.y), maxY);
-      setStickyPos({ x: newX, y: newY });
-    };
-
-    const handleMouseUp = () => {
-      setIsDraggingSticky(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDraggingSticky]);
 
   const [tableDensity, setTableDensity] = useState<TableDensity>(() => {
     try {
@@ -1333,7 +1275,9 @@ function App() {
     }
   }, [view, selectedDate]);
 
-  const openNew = (initialActivity?: string | React.MouseEvent) => {
+  const openNew = (
+    initial?: string | { activity?: string; reference?: string } | React.MouseEvent
+  ) => {
     if (view === 'day' && isDayLocked(selectedDate)) {
       if (window.confirm(`Day ${formatSheetDate(selectedDate)} is locked against unexpected edits. Unlock this day to add entries?`)) {
         toggleLockDay(selectedDate);
@@ -1341,112 +1285,77 @@ function App() {
         return;
       }
     }
+    const isPrefillObj =
+      Boolean(initial) &&
+      typeof initial === 'object' &&
+      !('nativeEvent' in (initial as object));
+    const activityPrefill =
+      typeof initial === 'string'
+        ? initial
+        : isPrefillObj
+        ? (initial as { activity?: string }).activity || ''
+        : '';
+    const refPrefill = isPrefillObj
+      ? (initial as { reference?: string }).reference || ''
+      : '';
+
     setEditing(null);
     setForm({
       date: selectedDate,
       taskCategory: "A Today's Work",
       module: modules[0] || companyModules[0],
-      activity: typeof initialActivity === 'string' ? initialActivity : '',
+      activity: activityPrefill,
       workDone: 'B In Progress',
       hours: '',
       type: '',
-      reference: '',
+      reference: refPrefill,
       appRemarks: '',
     });
     setShowForm(true);
   };
 
-  const activeNote = stickyNotes[activeNoteIndex] ?? stickyNotes[0];
-  const hasAnyNote = stickyNotes.some(n => n.content.trim());
+  const batchAddEntriesFromNotes = (
+    items: Array<{ activity: string; reference?: string }>,
+    mode: 'completed' | 'tomorrow'
+  ) => {
+    if (items.length === 0) return;
+    if (isDayLocked(selectedDate)) {
+      if (
+        window.confirm(
+          `Day ${formatSheetDate(selectedDate)} is locked against unexpected edits. Unlock this day to add ${items.length} task(s)?`
+        )
+      ) {
+        toggleLockDay(selectedDate);
+      } else {
+        return;
+      }
+    }
+    const now = new Date().toISOString();
+    const defaultMod = modules[0] || companyModules[0];
+    const created: WorkEntry[] = items.map(item => ({
+      id: makeId(),
+      date: selectedDate,
+      taskCategory: mode === 'completed' ? "A Today's Work" : "B Tomorrow's Plan",
+      module: defaultMod,
+      activity: item.activity.trim() || 'Untitled task',
+      workDone: mode === 'completed' ? 'A Completed' : '',
+      hours: 0,
+      type: '',
+      reference: (item.reference || '').trim(),
+      appRemarks: '',
+      createdAt: now,
+      updatedAt: now,
+    }));
 
-  const updateActiveNote = (text: string) => {
-    setStickyNotes(prev => prev.map((n, i) =>
-      i === activeNoteIndex ? { ...n, content: text, updatedAt: new Date().toISOString() } : n
-    ));
+    setEntries(old => [...old, ...created]);
+    setNotice(
+      mode === 'completed'
+        ? `Added ${created.length} completed ${created.length === 1 ? 'task' : 'tasks'} to ${formatSheetDate(selectedDate)}!`
+        : `Added ${created.length} ${created.length === 1 ? 'item' : 'items'} to Tomorrow's Plan (${formatSheetDate(selectedDate)})!`
+    );
   };
 
-  const addNewNote = () => {
-    const newNote: StickyNoteItem = {
-      id: `note-${Date.now()}`,
-      content: '',
-      color: 'yellow',
-      updatedAt: new Date().toISOString(),
-    };
-    setStickyNotes(prev => [...prev, newNote]);
-    setActiveNoteIndex(stickyNotes.length);
-    setTimeout(() => stickyTextareaRef.current?.focus(), 50);
-  };
-
-  const deleteActiveNote = () => {
-    if (stickyNotes.length <= 1) {
-      updateActiveNote('');
-      return;
-    }
-    if (activeNote.content.trim() && !window.confirm('Delete this sticky note?')) return;
-    setStickyNotes(prev => prev.filter((_, i) => i !== activeNoteIndex));
-    setActiveNoteIndex(prev => Math.max(0, prev - 1));
-  };
-
-  const changeNoteColor = (color: StickyColor) => {
-    setStickyNotes(prev => prev.map((n, i) =>
-      i === activeNoteIndex ? { ...n, color } : n
-    ));
-  };
-
-  const insertSnippetInNote = (snippet: string) => {
-    const ta = stickyTextareaRef.current;
-    const current = activeNote?.content || '';
-    if (!ta) {
-      updateActiveNote(current ? `${current}\n${snippet}` : snippet);
-      return;
-    }
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const before = current.substring(0, start);
-    const after = current.substring(end);
-    const needsPrefix = before.length > 0 && !before.endsWith('\n') ? '\n' : '';
-    const newText = `${before}${needsPrefix}${snippet}${after}`;
-    updateActiveNote(newText);
-    setTimeout(() => {
-      ta.focus();
-      const newCursor = start + needsPrefix.length + snippet.length;
-      ta.setSelectionRange(newCursor, newCursor);
-    }, 0);
-  };
-
-  const handleTurnNoteIntoTask = () => {
-    const ta = stickyTextareaRef.current;
-    const current = activeNote?.content || '';
-    let taskText = '';
-    if (ta && ta.selectionStart !== ta.selectionEnd) {
-      taskText = ta.value.substring(ta.selectionStart, ta.selectionEnd).trim();
-    }
-    if (!taskText) {
-      const lines = current.split('\n').map(l => l.replace(/^[-*•\s[\]x]+/, '').trim()).filter(Boolean);
-      taskText = lines[0] || '';
-    }
-    if (!taskText) {
-      setNotice('Write something in the note first!');
-      return;
-    }
-    openNew(taskText);
-  };
-
-  const handleCopyNote = async () => {
-    const current = activeNote?.content || '';
-    if (!current.trim()) {
-      setNotice('Note is empty.');
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(current);
-      setCopiedSticky(true);
-      setTimeout(() => setCopiedSticky(false), 2000);
-      setNotice('Note copied to clipboard!');
-    } catch {
-      setNotice('Failed to copy note.');
-    }
-  };
+  const hasAnyNote = stickyNotes.some(n => (n.content || '').trim() || (n.title || '').trim());
 
   const openEdit = (entry: WorkEntry) => {
     if (isEntryLocked(entry)) {
@@ -2063,21 +1972,17 @@ function App() {
 
       if (parsed && parsed.notes) {
         if (Array.isArray(parsed.notes) && parsed.notes.length > 0) {
-          setStickyNotes(parsed.notes);
-        }
-      }
-
-      if (parsed && parsed.notes) {
-        if (Array.isArray(parsed.notes)) {
-          setStickyNotes(parsed.notes);
-        } else if (typeof parsed.notes === 'object') {
+          setStickyNotes(parsed.notes.map((n: any, idx: number) => normalizeStickyNote(n, idx)));
+        } else if (!Array.isArray(parsed.notes) && typeof parsed.notes === 'object') {
           // Backward compatibility migration from v1 format
           const importedItems: StickyNoteItem[] = [];
           if (typeof parsed.notes.general === 'string' && parsed.notes.general.trim()) {
             importedItems.push({
               id: 'note-general-backup',
+              title: 'General Notes',
               content: parsed.notes.general,
               color: 'yellow',
+              isPinned: true,
               updatedAt: new Date().toISOString(),
             });
           }
@@ -2086,8 +1991,10 @@ function App() {
               if (typeof text === 'string' && text.trim()) {
                 importedItems.push({
                   id: `note-${dateStr}`,
+                  title: /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? `Notes · ${formatSheetDate(dateStr)}` : '',
                   content: text,
                   color: 'yellow',
+                  linkedDate: /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : undefined,
                   updatedAt: new Date().toISOString(),
                 });
               }
@@ -2211,7 +2118,7 @@ function App() {
 
       if (parsed && parsed.notes) {
         if (Array.isArray(parsed.notes) && parsed.notes.length > 0) {
-          setStickyNotes(parsed.notes);
+          setStickyNotes(parsed.notes.map((n: any, idx: number) => normalizeStickyNote(n, idx)));
         }
       }
 
@@ -2418,7 +2325,7 @@ function App() {
             </span>
             <button
               className="icon-button sticky-note-toggle-btn"
-              title="Sticky notes"
+              title="Sticky notes (Alt+N)"
               aria-label="Sticky notes"
               onClick={() => {
                 if (!showSticky) {
@@ -4249,164 +4156,23 @@ function App() {
         setNotice={setNotice}
       />
 
-      {/* FLOATING STICKY NOTE */}
-      {showSticky && (
-        isStickyMinimized ? (
-          <button
-            className="sticky-minimized-pill"
-            onClick={() => setIsStickyMinimized(false)}
-            title="Open sticky notes"
-          >
-            <StickyNote size={15} />
-            <span>Notes ({stickyNotes.length})</span>
-          </button>
-        ) : (
-          <div
-            id="floating-sticky-note"
-            className={`floating-sticky-note sticky-theme-${activeNote?.color || 'yellow'}`}
-            style={stickyPos ? { position: 'fixed', left: stickyPos.x, top: stickyPos.y, bottom: 'auto', right: 'auto' } : {}}
-          >
-            {/* Header / Drag Handle */}
-            <div className="sticky-header" onMouseDown={handleStickyMouseDown}>
-              <div className="sticky-header-left">
-                <StickyNote size={14} />
-                <span className="sticky-page-indicator">{activeNoteIndex + 1} / {stickyNotes.length}</span>
-                <button
-                  type="button"
-                  className="sticky-icon-btn"
-                  title="Previous note"
-                  onClick={() => setActiveNoteIndex(i => Math.max(0, i - 1))}
-                  disabled={activeNoteIndex === 0}
-                >
-                  <ChevronLeft size={13} />
-                </button>
-                <button
-                  type="button"
-                  className="sticky-icon-btn"
-                  title="Next note"
-                  onClick={() => setActiveNoteIndex(i => Math.min(stickyNotes.length - 1, i + 1))}
-                  disabled={activeNoteIndex === stickyNotes.length - 1}
-                >
-                  <ChevronRight size={13} />
-                </button>
-                <button
-                  type="button"
-                  className="sticky-icon-btn"
-                  title="New sticky note"
-                  onClick={addNewNote}
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
-              <div className="sticky-header-right">
-                <button
-                  type="button"
-                  className="sticky-icon-btn"
-                  title="Copy note"
-                  onClick={handleCopyNote}
-                >
-                  {copiedSticky ? <Check size={13} /> : <Copy size={13} />}
-                </button>
-                <button
-                  type="button"
-                  className="sticky-icon-btn"
-                  title="Minimize"
-                  onClick={() => setIsStickyMinimized(true)}
-                >
-                  <Minus size={13} />
-                </button>
-                <button
-                  type="button"
-                  className="sticky-icon-btn"
-                  title="Close"
-                  onClick={() => setShowSticky(false)}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            </div>
-
-            {/* Color dots + quick strip */}
-            <div className="sticky-quick-strip">
-              <div className="sticky-color-dots">
-                {(['yellow', 'green', 'blue', 'pink', 'purple', 'dark'] as StickyColor[]).map(c => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`sticky-color-dot ${activeNote?.color === c ? 'active' : ''}`}
-                    style={{
-                      background:
-                        c === 'yellow' ? '#fde047' :
-                        c === 'green' ? '#86efac' :
-                        c === 'blue' ? '#7dd3fc' :
-                        c === 'pink' ? '#f9a8d4' :
-                        c === 'purple' ? '#d8b4fe' : '#1e293b'
-                    }}
-                    title={`${c} theme`}
-                    onClick={() => changeNoteColor(c)}
-                  />
-                ))}
-              </div>
-              <button
-                type="button"
-                className="sticky-pill-btn"
-                title="Insert checkbox"
-                onClick={() => insertSnippetInNote('- [ ] ')}
-              >
-                <CheckSquare size={11} /> Todo
-              </button>
-              <button
-                type="button"
-                className="sticky-pill-btn"
-                title="Insert bullet point"
-                onClick={() => insertSnippetInNote('• ')}
-              >
-                <List size={11} /> Bullet
-              </button>
-              <button
-                type="button"
-                className="sticky-pill-btn"
-                title="Insert current timestamp"
-                onClick={() => {
-                  const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                  insertSnippetInNote(`[${t}] `);
-                }}
-              >
-                <Clock3 size={11} />
-              </button>
-              <button
-                type="button"
-                className="sticky-pill-btn"
-                style={{ marginLeft: 'auto' }}
-                onClick={handleTurnNoteIntoTask}
-                title="Turn note into task"
-              >
-                <ListPlus size={11} /> Task
-              </button>
-              <button
-                type="button"
-                className="sticky-icon-btn"
-                onClick={deleteActiveNote}
-                title="Delete note"
-              >
-                <Trash2 size={12} />
-              </button>
-            </div>
-
-            {/* Textarea */}
-            <div className="sticky-content">
-              <textarea
-                ref={stickyTextareaRef}
-                className="sticky-textarea"
-                value={activeNote?.content || ''}
-                onChange={e => updateActiveNote(e.target.value)}
-                placeholder="Quick notes, links, todos..."
-                autoFocus
-              />
-            </div>
-          </div>
-        )
-      )}
+      {/* ENHANCED FLOATING / DOCKABLE STICKY NOTEPAD */}
+      <StickyNotepad
+        notes={stickyNotes}
+        setNotes={setStickyNotes}
+        showSticky={showSticky}
+        setShowSticky={setShowSticky}
+        isMinimized={isStickyMinimized}
+        setIsMinimized={setIsStickyMinimized}
+        selectedDate={selectedDate}
+        onJumpToDate={dateStr => {
+          setSelectedDate(dateStr);
+          setView('day');
+        }}
+        onOpenNewTask={prefill => openNew(prefill)}
+        onBatchAddTasks={batchAddEntriesFromNotes}
+        setNotice={setNotice}
+      />
 
       {/* TOAST FEEDBACK */}
       {notice && (

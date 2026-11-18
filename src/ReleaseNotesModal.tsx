@@ -1486,7 +1486,7 @@ function renderInlineMarkdown(text: string): React.ReactNode {
     const codeMatch = remaining.match(/^`([^`]+)`/);
     if (codeMatch) {
       const codeVal = codeMatch[1];
-      const isWorkType = ['[Development]', '[Bug Fixing]', '[Testing]', '[Investigation]', '[Training]', '[Meeting / Discussion]'].some(t => codeVal.includes(t));
+      const isWorkType = ['[Development]', '[Bug Fixing]', '[Testing]', '[Investigation]', '[Training]', '[Meeting / Discussion]', '[UI/UX Improvement]'].some(t => codeVal.includes(t));
       parts.push(
         <code key={keyIdx++} className={isWorkType ? 'gh-type-pill' : 'gh-code'}>
           {codeVal}
